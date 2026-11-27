@@ -76,9 +76,9 @@ impl Reconciler for WorkloadReconciler {
                             automount_service_account_token: Some(false),
                             termination_grace_period_seconds: Some(30),
                             security_context: Some(PodSecurityContext {
-                                run_as_user: Some(65532),
+                                run_as_user: Some(0),
                                 run_as_group: Some(65532),
-                                run_as_non_root: Some(true),
+                                run_as_non_root: Some(false),
                                 fs_group: Some(65532),
                                 ..Default::default()
                             }),
