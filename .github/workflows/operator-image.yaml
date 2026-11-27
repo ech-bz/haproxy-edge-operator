@@ -10,6 +10,7 @@ on:
       - 'Dockerfile'
       - 'Dockerfile.dockerignore'
       - 'src/**'
+      - 'patches/**'
       - 'external-crds/**'
       - 'charts/haproxy-edge-operator-crds/**'
       - '.github/workflows/operator-image.yaml'

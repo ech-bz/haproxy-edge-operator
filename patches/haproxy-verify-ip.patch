@@ -1,0 +1,38 @@
+--- a/src/ssl_sock.c
++++ b/src/ssl_sock.c
+@@ -25,6 +25,7 @@
+ 
+ /* Note: do NOT include openssl/xxx.h here, do it in openssl-compat.h */
+ #define _GNU_SOURCE
++#include <arpa/inet.h>
+ #include <ctype.h>
+ #include <dirent.h>
+ #include <errno.h>
+@@ -4582,6 +4583,7 @@
+ 	struct ssl_sock_ctx *ssl_ctx;
+ 	const char *servername;
+ 	const char *sni;
++	unsigned char ip[sizeof(struct in6_addr)];
+ 
+ 	int depth;
+ 	X509 *cert;
+@@ -4627,6 +4629,11 @@
+ 	if (!cert)
+ 		return ok;
+ 
++	if (inet_pton(AF_INET, servername, ip) == 1 || inet_pton(AF_INET6, servername, ip) == 1) {
++		ok = X509_check_ip_asc(cert, servername, 0) == 1;
++		goto verify_done;
++	}
++
+ 	alt_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+ 	if (alt_names) {
+ 		for (i = 0; !ok && i < sk_GENERAL_NAME_num(alt_names); i++) {
+@@ -4665,6 +4672,7 @@
+ 		}
+ 	}
+ 
++verify_done:
+ 	/* report the mismatch and indicate if SNI was used or not */
+ 	if (!ok && !conn->err_code)
+ 		conn->err_code = sni ? CO_ER_SSL_MISMATCH_SNI : CO_ER_SSL_MISMATCH;
