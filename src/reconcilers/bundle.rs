@@ -9,10 +9,7 @@ use crate::{
     },
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, Reconciler, ResourcesExt};
-use k8s_openapi::api::{
-    core::v1::{ConfigMap, Service},
-    networking::v1::Ingress,
-};
+use k8s_openapi::api::{core::v1::ConfigMap, networking::v1::Ingress};
 use k8s_openapi::{ByteString, api::core::v1::Secret};
 use kube::{ResourceExt, api::ListParams};
 use serde::Serialize;
@@ -294,64 +291,12 @@ frontend http
                 }
                 config.push_str("  default_backend unmatched\n");
                 for (index, route) in routes.iter().enumerate() {
-                    let url = route.url.as_deref().map(backend_url).transpose()?;
-                    let (host, port, scheme) = if let Some(url) = &url {
-                        let scheme = url.scheme_str().unwrap();
-                        (
-                            url.host().unwrap().to_string(),
-                            i64::from(url.port_u16().unwrap_or(if scheme == "https" {
-                                443
-                            } else {
-                                80
-                            })),
-                            scheme,
-                        )
-                    } else {
-                        let reference = route
-                            .service
-                            .as_ref()
-                            .ok_or_else(|| invalid("missing service"))?;
-                        let name = &reference.name;
-                        let number = reference.port;
-                        let namespace = reference.namespace.clone().unwrap_or(group.cr_ns()?);
-                        let service = client
-                            .namespaced::<Service>(&namespace)
-                            .api()
-                            .get(name)
-                            .await?;
-                        let port = service
-                            .spec
-                            .as_ref()
-                            .and_then(|spec| spec.ports.as_ref())
-                            .and_then(|ports| {
-                                ports.iter().find(|port| {
-                                    port.port as i64 == number
-                                        && port.protocol.as_deref().unwrap_or("TCP") == "TCP"
-                                })
-                            })
-                            .ok_or_else(|| {
-                                invalid(format!(
-                                    "Service {namespace}/{name} has no TCP port {number}"
-                                ))
-                            })?;
-                        let scheme = reference.scheme.as_deref().unwrap_or_else(|| {
-                            if number == 443
-                                || port
-                                    .name
-                                    .as_deref()
-                                    .is_some_and(|name| name.starts_with("https"))
-                            {
-                                "https"
-                            } else {
-                                "http"
-                            }
-                        });
-                        (
-                            format!("{name}.{namespace}.svc.{}", self.operator.cluster_domain),
-                            number,
-                            scheme,
-                        )
-                    };
+                    let url = backend_url(&route.url)?;
+                    let scheme = url.scheme_str().unwrap();
+                    let host = url.host().unwrap();
+                    let port = url
+                        .port_u16()
+                        .unwrap_or(if scheme == "https" { 443 } else { 80 });
                     writeln!(config, "\nbackend route_{index}").unwrap();
                     if route.strip_prefix.unwrap_or(false) {
                         writeln!(
@@ -367,22 +312,20 @@ frontend http
                         )
                         .unwrap();
                     }
-                    if let Some(url) = &url {
+                    writeln!(
+                        config,
+                        "  http-request set-header Host {}",
+                        literal(url.authority().unwrap().as_str())
+                    )
+                    .unwrap();
+                    let path = url.path().trim_end_matches('/');
+                    if !path.is_empty() {
                         writeln!(
                             config,
-                            "  http-request set-header Host {}",
-                            literal(url.authority().unwrap().as_str())
+                            "  http-request set-path {}",
+                            quote(&format!("{}%[path]", path.replace('%', "%%")))
                         )
                         .unwrap();
-                        let path = url.path().trim_end_matches('/');
-                        if !path.is_empty() {
-                            writeln!(
-                                config,
-                                "  http-request set-path {}",
-                                quote(&format!("{}%[path]", path.replace('%', "%%")))
-                            )
-                            .unwrap();
-                        }
                     }
                     for (name, template) in route.headers.iter().flatten() {
                         let mut value = String::new();

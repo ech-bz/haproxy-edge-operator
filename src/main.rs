@@ -12,7 +12,7 @@ use ech_k8s::{Operator, OperatorSpec, RuntimeSettings};
 use error::{OperatorError, Result};
 use k8s_openapi::api::{
     apps::v1::DaemonSet,
-    core::v1::{ConfigMap, Namespace, Node, Secret, Service},
+    core::v1::{ConfigMap, Namespace, Node, Secret},
     networking::v1::Ingress,
 };
 use kube::{
@@ -266,7 +266,6 @@ async fn main() -> Result<()> {
                 },
                 move |controller, client| {
                     let nodes = controller.store();
-                    let services = controller.store();
                     let issuers = controller.store();
                     let solvers = controller.store();
                     let secrets = controller.store();
@@ -289,33 +288,6 @@ async fn main() -> Result<()> {
                                     .filter(|cr| {
                                         cr.name_any() == group
                                             || old.as_deref() == Some(cr.name_any().as_str())
-                                    })
-                                    .map(|cr| ObjectRef::from_obj(&*cr))
-                                    .collect::<Vec<_>>()
-                            },
-                        )
-                        .watches(
-                            client.all::<Service>().into_inner(),
-                            watcher::Config::default(),
-                            move |service: Service| {
-                                services
-                                    .state()
-                                    .into_iter()
-                                    .filter(|cr| {
-                                        service
-                                            .labels()
-                                            .get("acme.cert-manager.io/http01-solver")
-                                            .is_some_and(|value| value == "true")
-                                            || cr.spec.routes.iter().flatten().any(|route| {
-                                                route.service.as_ref().is_some_and(|reference| {
-                                                    reference.name == service.name_any()
-                                                        && reference
-                                                            .namespace
-                                                            .clone()
-                                                            .or_else(|| cr.namespace())
-                                                            == service.namespace()
-                                                })
-                                            })
                                     })
                                     .map(|cr| ObjectRef::from_obj(&*cr))
                                     .collect::<Vec<_>>()

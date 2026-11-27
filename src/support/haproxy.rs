@@ -75,7 +75,7 @@ pub(crate) fn backend_url(value: &str) -> Result<http::Uri, OperatorError> {
         .ok_or_else(|| invalid("backend URL has no host"))?;
     let host = authority.host();
     if host.is_empty()
-        || !matches!(url.scheme_str(), Some("http" | "https"))
+        || !matches!(url.scheme_str(), Some("http" | "https" | "h2c"))
         || authority.as_str().contains('@')
         || url.query().is_some()
         || value.contains('#')
@@ -83,7 +83,7 @@ pub(crate) fn backend_url(value: &str) -> Result<http::Uri, OperatorError> {
             && !authority.port_u16().is_some_and(|port| port > 0))
     {
         return Err(invalid(
-            "backend URL requires http or https, a host and numeric port, and no credentials, query or fragment",
+            "backend URL requires http, https or h2c, a host and numeric port, and no credentials, query or fragment",
         ));
     }
     Ok(url)

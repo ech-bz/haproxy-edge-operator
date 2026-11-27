@@ -13,7 +13,7 @@ rules:
     resources: ["ingressgroups", "ingressgroups/status", "ingressgroups/finalizers"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
-    resources: ["nodes", "services", "configmaps"]
+    resources: ["nodes", "configmaps"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["namespaces", "secrets"]

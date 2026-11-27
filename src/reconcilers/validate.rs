@@ -53,31 +53,7 @@ impl Reconciler for ValidateReconciler {
                     route.path_prefix
                 )));
             }
-            match (&route.url, &route.service) {
-                (Some(url), None) => {
-                    backend_url(url)?;
-                }
-                (None, Some(service)) => {
-                    if !dns_name(&service.name)
-                        || service.name.contains('.')
-                        || service
-                            .namespace
-                            .as_deref()
-                            .is_some_and(|ns| !dns_name(ns) || ns.contains('.'))
-                        || !(1..=65535).contains(&service.port)
-                    {
-                        return Err(invalid("invalid backend service reference"));
-                    }
-                    if service
-                        .scheme
-                        .as_deref()
-                        .is_some_and(|scheme| !["http", "https", "h2c"].contains(&scheme))
-                    {
-                        return Err(invalid("unsupported backend scheme"));
-                    }
-                }
-                _ => return Err(invalid("specify exactly one of url or service")),
-            }
+            backend_url(&route.url)?;
             let mut headers = BTreeSet::new();
             for (name, value) in route.headers.iter().flatten() {
                 if name.is_empty()

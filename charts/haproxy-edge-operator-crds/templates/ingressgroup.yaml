@@ -43,10 +43,7 @@ spec:
                   description: Path routes owned by this group.
                   items:
                     type: object
-                    required: [pathPrefix]
-                    x-kubernetes-validations:
-                      - rule: 'has(self.url) != has(self.service)'
-                        message: Specify exactly one of url or service.
+                    required: [pathPrefix, url]
                     properties:
                       pathPrefix:
                         type: string
@@ -54,27 +51,12 @@ spec:
                       url:
                         type: string
                         description: >-
-                          HTTP or HTTPS backend URL without credentials, query or fragment.
+                          HTTP, HTTPS or h2c backend URL without credentials, query or fragment.
+                          Kubernetes Services use their DNS name and Service port.
+                          h2c uses HTTP/2 without TLS.
                           HTTPS verifies the upstream certificate using system CAs and the URL host.
                           The URL path is prepended after stripPrefix; the request query is preserved.
                           Host is set from the URL before custom headers.
-                      service:
-                        type: object
-                        required: [name, port]
-                        properties:
-                          name:
-                            type: string
-                          namespace:
-                            type: string
-                            description: Defaults to the IngressGroup namespace when omitted.
-                          port:
-                            type: integer
-                            minimum: 1
-                            maximum: 65535
-                          scheme:
-                            type: string
-                            pattern: '^(http|https|h2c)$'
-                            description: Backend protocol. When omitted, the Service port selects http or https.
                       stripPrefix:
                         type: boolean
                         description: When true, pathPrefix is removed before forwarding to the backend.
