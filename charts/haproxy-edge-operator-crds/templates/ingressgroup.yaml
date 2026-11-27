@@ -1,0 +1,72 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ingressgroups.ech.bz
+spec:
+  group: ech.bz
+  scope: Namespaced
+  names:
+    plural: ingressgroups
+    singular: ingressgroup
+    kind: IngressGroup
+    shortNames:
+      - igroup
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            spec:
+              type: object
+              properties:
+                forwardedTrustedIps:
+                  type: array
+                  description: Peers allowed to supply X-Forwarded-For for this group's entrypoints.
+                  items:
+                    type: string
+                domains:
+                  type: array
+                  description: Hostnames owned by this group.
+                  items:
+                    type: string
+                routes:
+                  type: array
+                  description: Path routes owned by this group.
+                  items:
+                    type: object
+                    required: [pathPrefix, serviceName, servicePort]
+                    properties:
+                      pathPrefix:
+                        type: string
+                        description: Case-sensitive string prefix.
+                      serviceName:
+                        type: string
+                      serviceNamespace:
+                        type: string
+                        description: Backend service namespace. Defaults to the IngressGroup namespace when omitted.
+                      servicePort:
+                        type: integer
+                        minimum: 1
+                        maximum: 65535
+                      serviceScheme:
+                        type: string
+                        pattern: '^(http|https|h2c)$'
+                        description: Backend protocol. When omitted, The service port selects http or https.
+                      stripPrefix:
+                        type: boolean
+                        description: When true, pathPrefix is removed before forwarding to the backend.
+                      headers:
+                        type: object
+                        minProperties: 1
+                        description: Request headers added to the proxied request. A header set to an empty string is removed.
+                        additionalProperties:
+                          type: string

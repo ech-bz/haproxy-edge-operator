@@ -1,0 +1,4 @@
+apiVersion: v2
+name: haproxy-edge-operator-crds
+version: 0.1.0
+type: application

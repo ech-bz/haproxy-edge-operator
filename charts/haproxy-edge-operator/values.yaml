@@ -1,0 +1,22 @@
+image:
+  repository: ghcr.io/ech-bz/haproxy-edge-operator
+  tag: ""
+  pullPolicy: IfNotPresent
+
+leader:
+  name: haproxy-edge-operator
+  leaseDurationSeconds: 30
+  leaseGraceSeconds: 15
+
+healthPort: 8081
+reconcileIntervalSeconds: 60
+errorBackoffSeconds: 10
+clusterDomain: cluster.local
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
