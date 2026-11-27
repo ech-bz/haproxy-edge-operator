@@ -1,0 +1,54 @@
+use ech_k8s::Component;
+use serde::Serialize;
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "haproxy")]
+pub(crate) struct ProxyComponent;
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "bundle")]
+pub(crate) struct BundleComponent;
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "edge")]
+pub(crate) struct NamespaceComponent {
+    pub(crate) node: ResourceId,
+}
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "domain-cert")]
+pub(crate) struct DomainCertificateComponent {
+    pub(crate) domain: ResourceId,
+}
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "ip-cert")]
+pub(crate) struct IpCertificateComponent {
+    pub(crate) ip: ResourceId,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub(crate) struct ResourceId([u8; 8]);
+
+impl ResourceId {
+    pub(crate) fn new(value: impl AsRef<[u8]>) -> Self {
+        use sha2::{Digest, Sha256};
+        Self(Sha256::digest(value.as_ref())[..8].try_into().unwrap())
+    }
+}
+
+impl std::fmt::Display for ResourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(self.0))
+    }
+}
+
+pub(crate) const GROUP: &str = "ech.bz/ingress-group";
+pub(crate) const GROUP_NS: &str = "ech.bz/ingress-namespace";
+pub(crate) const OWNER: &str = "ech.bz/ingress-uid";
+pub(crate) const PUBLIC_IP: &str = "ech.bz/public-ip";
+
+pub(crate) fn hash(value: impl AsRef<[u8]>) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(value.as_ref()))[..16].into()
+}
