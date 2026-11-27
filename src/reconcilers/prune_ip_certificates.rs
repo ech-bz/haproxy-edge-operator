@@ -4,11 +4,10 @@ use crate::{
     support::{
         certificates,
         components::{IpCertificateComponent, ResourceId},
-        resources::{edge_namespace, node_ip, owner, selected_nodes},
+        resources::{node_ip, owner, selected_nodes},
     },
 };
 use ech_k8s::{Component, K8sClient, NodeState, Reconciler};
-use kube::ResourceExt;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -22,8 +21,10 @@ impl Reconciler for PruneIpCertificatesReconciler {
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
         for node in selected_nodes(client, group).await? {
-            let Ok(ip) = node_ip(&node) else { continue };
-            let namespace = edge_namespace(group, &node.name_any())?;
+            let Ok(ip) = node_ip(&node.node) else {
+                continue;
+            };
+            let namespace = node.namespace;
             if client
                 .all::<k8s_openapi::api::core::v1::Namespace>()
                 .api()

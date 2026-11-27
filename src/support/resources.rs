@@ -17,6 +17,11 @@ pub(crate) struct EdgeNode {
     pub(crate) ip: IpAddr,
 }
 
+pub(crate) struct SelectedNode {
+    pub(crate) node: Node,
+    pub(crate) namespace: String,
+}
+
 pub(crate) fn owner(group: &IngressGroup) -> Result<String> {
     Ok(hash(group.uid().ok_or_else(|| {
         OperatorError::Config("IngressGroup has no UID".into())
@@ -64,13 +69,6 @@ pub(crate) fn metadata(
     })
 }
 
-pub(crate) fn edge_namespace(group: &IngressGroup, node: &str) -> Result<String> {
-    Ok(NamespaceComponent {
-        node: ResourceId::new(node),
-    }
-    .name(owner(group)?))
-}
-
 pub(crate) fn node_ip(node: &Node) -> Result<IpAddr> {
     let name = node.name_any();
     let address = node
@@ -83,26 +81,37 @@ pub(crate) fn node_ip(node: &Node) -> Result<IpAddr> {
         .map_err(|_| OperatorError::Config(format!("node {name} has invalid public IP {address}")))
 }
 
-pub(crate) async fn selected_nodes(client: &K8sClient, group: &IngressGroup) -> Result<Vec<Node>> {
+pub(crate) async fn selected_nodes(
+    client: &K8sClient,
+    group: &IngressGroup,
+) -> Result<Vec<SelectedNode>> {
+    let name = group.cr_name()?;
     Ok(client
         .all::<Node>()
         .api()
-        .list(&ListParams::default().labels(&format!("{GROUP}={}", group.cr_name()?)))
+        .list(&ListParams::default().labels(&format!("{GROUP}={name}")))
         .await?
-        .items)
+        .items
+        .into_iter()
+        .map(|node| {
+            let component = NamespaceComponent {
+                node: ResourceId::new(node.name_any()),
+            };
+            let namespace = component.name(NamespacePrefix::new(&name, &component));
+            SelectedNode { node, namespace }
+        })
+        .collect())
 }
 
 pub(crate) async fn edge_nodes(client: &K8sClient, group: &IngressGroup) -> Result<Vec<EdgeNode>> {
     selected_nodes(client, group)
         .await?
         .into_iter()
-        .map(|node| {
-            let node_name = node.name_any();
-            let ip = node_ip(&node)?;
+        .map(|selected| {
             Ok(EdgeNode {
-                namespace: edge_namespace(group, &node_name)?,
-                name: node_name,
-                ip,
+                name: selected.node.name_any(),
+                namespace: selected.namespace,
+                ip: node_ip(&selected.node)?,
             })
         })
         .collect()

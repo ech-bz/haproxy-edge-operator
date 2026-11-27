@@ -1,7 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::resources::{edge_namespace, owned_namespaces, selected_nodes},
+    support::resources::{owned_namespaces, selected_nodes},
 };
 use ech_k8s::{K8sClient, NodeState, Reconciler, ResourcesExt};
 use k8s_openapi::api::core::v1::Namespace;
@@ -21,8 +21,8 @@ impl Reconciler for PruneNamespacesReconciler {
         let desired: BTreeSet<_> = selected_nodes(client, group)
             .await?
             .into_iter()
-            .map(|node| edge_namespace(group, &node.name_any()))
-            .collect::<Result<_>>()?;
+            .map(|node| node.namespace)
+            .collect();
         for namespace in owned_namespaces(client, group).await? {
             if !desired.contains(&namespace.name_any()) {
                 client

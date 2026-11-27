@@ -15,6 +15,31 @@ pub(crate) struct NamespaceComponent {
     pub(crate) node: ResourceId,
 }
 
+pub(crate) struct NamespacePrefix(String);
+
+impl NamespacePrefix {
+    pub(crate) fn new(value: impl AsRef<str>, component: &NamespaceComponent) -> Self {
+        let value = value.as_ref();
+        let limit = 63 - component.name("").len();
+        Self(if value.len() > limit || value.contains('.') {
+            let digest = hash(value);
+            let readable = limit - digest.len() - 1;
+            format!(
+                "{}-{digest}",
+                value.replace('.', "-")[..value.len().min(readable)].trim_end_matches('-'),
+            )
+        } else {
+            value.to_string()
+        })
+    }
+}
+
+impl AsRef<str> for NamespacePrefix {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy, Serialize, Component)]
 #[component(name = "domain-cert")]
 pub(crate) struct DomainCertificateComponent {
