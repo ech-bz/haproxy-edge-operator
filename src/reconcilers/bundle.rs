@@ -300,14 +300,13 @@ frontend http
                             scheme,
                         )
                     } else {
-                        let name = route
-                            .service_name
-                            .as_deref()
-                            .ok_or_else(|| invalid("missing serviceName"))?;
-                        let number = route
-                            .service_port
-                            .ok_or_else(|| invalid("missing servicePort"))?;
-                        let namespace = route.service_namespace.clone().unwrap_or(group.cr_ns()?);
+                        let reference = route
+                            .service
+                            .as_ref()
+                            .ok_or_else(|| invalid("missing service"))?;
+                        let name = &reference.name;
+                        let number = reference.port;
+                        let namespace = reference.namespace.clone().unwrap_or(group.cr_ns()?);
                         let service = client
                             .namespaced::<Service>(&namespace)
                             .api()
@@ -328,7 +327,7 @@ frontend http
                                     "Service {namespace}/{name} has no TCP port {number}"
                                 ))
                             })?;
-                        let scheme = route.service_scheme.as_deref().unwrap_or_else(|| {
+                        let scheme = reference.scheme.as_deref().unwrap_or_else(|| {
                             if number == 443
                                 || port
                                     .name

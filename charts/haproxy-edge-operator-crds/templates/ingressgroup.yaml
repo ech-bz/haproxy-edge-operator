@@ -45,8 +45,8 @@ spec:
                     type: object
                     required: [pathPrefix]
                     x-kubernetes-validations:
-                      - rule: 'has(self.url) ? !(has(self.serviceName) || has(self.servicePort) || has(self.serviceNamespace) || has(self.serviceScheme)) : has(self.serviceName) && has(self.servicePort)'
-                        message: Specify either url or serviceName and servicePort. Service fields cannot be combined with url.
+                      - rule: 'has(self.url) != has(self.service)'
+                        message: Specify exactly one of url or service.
                     properties:
                       pathPrefix:
                         type: string
@@ -58,19 +58,23 @@ spec:
                           HTTPS verifies the upstream certificate using system CAs and the URL host.
                           The URL path is prepended after stripPrefix; the request query is preserved.
                           Host is set from the URL before custom headers.
-                      serviceName:
-                        type: string
-                      serviceNamespace:
-                        type: string
-                        description: Backend service namespace. Defaults to the IngressGroup namespace when omitted.
-                      servicePort:
-                        type: integer
-                        minimum: 1
-                        maximum: 65535
-                      serviceScheme:
-                        type: string
-                        pattern: '^(http|https|h2c)$'
-                        description: Backend protocol. When omitted, The service port selects http or https.
+                      service:
+                        type: object
+                        required: [name, port]
+                        properties:
+                          name:
+                            type: string
+                          namespace:
+                            type: string
+                            description: Defaults to the IngressGroup namespace when omitted.
+                          port:
+                            type: integer
+                            minimum: 1
+                            maximum: 65535
+                          scheme:
+                            type: string
+                            pattern: '^(http|https|h2c)$'
+                            description: Backend protocol. When omitted, the Service port selects http or https.
                       stripPrefix:
                         type: boolean
                         description: When true, pathPrefix is removed before forwarding to the backend.

@@ -305,13 +305,14 @@ async fn main() -> Result<()> {
                                             .get("acme.cert-manager.io/http01-solver")
                                             .is_some_and(|value| value == "true")
                                             || cr.spec.routes.iter().flatten().any(|route| {
-                                                route.service_name.as_deref()
-                                                    == Some(service.name_any().as_str())
-                                                    && route
-                                                        .service_namespace
-                                                        .clone()
-                                                        .or_else(|| cr.namespace())
-                                                        == service.namespace()
+                                                route.service.as_ref().is_some_and(|reference| {
+                                                    reference.name == service.name_any()
+                                                        && reference
+                                                            .namespace
+                                                            .clone()
+                                                            .or_else(|| cr.namespace())
+                                                            == service.namespace()
+                                                })
                                             })
                                     })
                                     .map(|cr| ObjectRef::from_obj(&*cr))

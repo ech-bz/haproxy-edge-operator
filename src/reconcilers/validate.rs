@@ -53,32 +53,30 @@ impl Reconciler for ValidateReconciler {
                     route.path_prefix
                 )));
             }
-            match (&route.url, &route.service_name, route.service_port) {
-                (Some(url), None, None)
-                    if route.service_namespace.is_none() && route.service_scheme.is_none() =>
-                {
+            match (&route.url, &route.service) {
+                (Some(url), None) => {
                     backend_url(url)?;
                 }
-                (None, Some(name), Some(port)) => {
-                    if !dns_name(name)
-                        || name.contains('.')
-                        || route
-                            .service_namespace
+                (None, Some(service)) => {
+                    if !dns_name(&service.name)
+                        || service.name.contains('.')
+                        || service
+                            .namespace
                             .as_deref()
                             .is_some_and(|ns| !dns_name(ns) || ns.contains('.'))
-                        || !(1..=65535).contains(&port)
+                        || !(1..=65535).contains(&service.port)
                     {
                         return Err(invalid("invalid backend service reference"));
                     }
-                    if route
-                        .service_scheme
+                    if service
+                        .scheme
                         .as_deref()
                         .is_some_and(|scheme| !["http", "https", "h2c"].contains(&scheme))
                     {
                         return Err(invalid("unsupported backend scheme"));
                     }
                 }
-                _ => return Err(invalid("specify either url or serviceName and servicePort")),
+                _ => return Err(invalid("specify exactly one of url or service")),
             }
             let mut headers = BTreeSet::new();
             for (name, value) in route.headers.iter().flatten() {
