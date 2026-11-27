@@ -9,7 +9,7 @@ kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}
 rules:
-  - apiGroups: ["ech.bz"]
+  - apiGroups: ["haproxy.ech.bz"]
     resources: ["ingressgroups", "ingressgroups/status", "ingressgroups/finalizers"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
@@ -26,6 +26,9 @@ rules:
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
   - apiGroups: ["cert-manager.io"]
     resources: ["clusterissuers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

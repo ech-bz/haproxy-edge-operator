@@ -13,6 +13,7 @@ use error::{OperatorError, Result};
 use k8s_openapi::api::{
     apps::v1::DaemonSet,
     core::v1::{Namespace, Node, Secret, Service},
+    networking::v1::Ingress,
 };
 use kube::{
     ResourceExt,
@@ -245,6 +246,7 @@ async fn main() -> Result<()> {
                     let nodes = controller.store();
                     let services = controller.store();
                     let issuers = controller.store();
+                    let solvers = controller.store();
                     let previous = Mutex::new(HashMap::<String, String>::new());
                     let owned = watcher::Config::default().labels(OWNER);
                     controller
@@ -276,14 +278,18 @@ async fn main() -> Result<()> {
                                     .state()
                                     .into_iter()
                                     .filter(|cr| {
-                                        cr.spec.routes.iter().flatten().any(|route| {
-                                            route.service_name == service.name_any()
-                                                && route
-                                                    .service_namespace
-                                                    .clone()
-                                                    .or_else(|| cr.namespace())
-                                                    == service.namespace()
-                                        })
+                                        service
+                                            .labels()
+                                            .get("acme.cert-manager.io/http01-solver")
+                                            .is_some_and(|value| value == "true")
+                                            || cr.spec.routes.iter().flatten().any(|route| {
+                                                route.service_name == service.name_any()
+                                                    && route
+                                                        .service_namespace
+                                                        .clone()
+                                                        .or_else(|| cr.namespace())
+                                                        == service.namespace()
+                                            })
                                     })
                                     .map(|cr| ObjectRef::from_obj(&*cr))
                                     .collect::<Vec<_>>()
@@ -297,6 +303,28 @@ async fn main() -> Result<()> {
                                     .state()
                                     .into_iter()
                                     .filter(|cr| cr.name_any() == issuer.name_any())
+                                    .map(|cr| ObjectRef::from_obj(&*cr))
+                                    .collect::<Vec<_>>()
+                            },
+                        )
+                        .watches(
+                            client.all::<Ingress>().into_inner(),
+                            watcher::Config::default()
+                                .labels("acme.cert-manager.io/http01-solver=true"),
+                            move |ingress: Ingress| {
+                                let class = ingress
+                                    .spec
+                                    .as_ref()
+                                    .and_then(|spec| spec.ingress_class_name.as_ref())
+                                    .or_else(|| {
+                                        ingress.annotations().get("kubernetes.io/ingress.class")
+                                    });
+                                solvers
+                                    .state()
+                                    .into_iter()
+                                    .filter(|cr| {
+                                        class == Some(&format!("haproxy-{}", cr.name_any()))
+                                    })
                                     .map(|cr| ObjectRef::from_obj(&*cr))
                                     .collect::<Vec<_>>()
                             },

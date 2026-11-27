@@ -65,8 +65,8 @@ impl Workflow for EdgeWorkflow {
         let workload = WorkloadReconciler {
             operator: self.operator.clone(),
         };
-        graph.add(workload.clone(), [bundle.into()])?;
-        graph.add(ReadinessReconciler, [workload.into()])?;
+        graph.add(workload.clone(), [NamespacesReconciler.into()])?;
+        graph.add(ReadinessReconciler, [workload.into(), bundle.into()])?;
         Ok(graph)
     }
 }

@@ -43,9 +43,9 @@ impl std::fmt::Display for ResourceId {
     }
 }
 
-pub(crate) const GROUP: &str = "ech.bz/ingress-group";
-pub(crate) const GROUP_NS: &str = "ech.bz/ingress-namespace";
-pub(crate) const OWNER: &str = "ech.bz/ingress-uid";
+pub(crate) const GROUP: &str = "haproxy.ech.bz/ingress-group";
+pub(crate) const GROUP_NS: &str = "haproxy.ech.bz/ingress-namespace";
+pub(crate) const OWNER: &str = "haproxy.ech.bz/ingress-uid";
 pub(crate) const PUBLIC_IP: &str = "ech.bz/public-ip";
 
 pub(crate) fn hash(value: impl AsRef<[u8]>) -> String {
