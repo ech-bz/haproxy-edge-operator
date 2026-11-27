@@ -4,16 +4,22 @@ use crate::{
     error::{OperatorError, Result},
     support::{
         components::*,
-        haproxy::{backend_url, dns_name, invalid},
+        haproxy::{HeaderPart, HeaderTemplate, backend_url, dns_name, invalid},
         resources::{edge_nodes, metadata, owner},
     },
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, Reconciler, ResourcesExt};
-use k8s_openapi::api::{core::v1::Service, networking::v1::Ingress};
+use k8s_openapi::api::{
+    core::v1::{ConfigMap, Service},
+    networking::v1::Ingress,
+};
 use k8s_openapi::{ByteString, api::core::v1::Secret};
 use kube::{ResourceExt, api::ListParams};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Write};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    fmt::Write,
+};
 
 #[derive(Clone, Serialize)]
 pub(crate) struct BundleReconciler {
@@ -37,6 +43,7 @@ impl Reconciler for BundleReconciler {
             )
         };
         let literal = |value: &str| quote(&value.replace('%', "%%"));
+        let mut sources = BTreeMap::new();
         let nodes = edge_nodes(client, group).await?;
         let mut solvers = client
             .all::<Ingress>()
@@ -377,16 +384,65 @@ frontend http
                             .unwrap();
                         }
                     }
-                    for (name, value) in route.headers.iter().flatten() {
+                    for (name, template) in route.headers.iter().flatten() {
+                        let mut value = String::new();
+                        for part in HeaderTemplate::new(template)?.parts {
+                            match part {
+                                HeaderPart::Literal(text) => {
+                                    value.push_str(&text.replace('%', "%%"))
+                                }
+                                HeaderPart::RemoteHost => value.push_str("%[src]"),
+                                HeaderPart::Source { kind, name, key } => {
+                                    let source = match sources.entry((kind, name, key)) {
+                                        Entry::Occupied(entry) => entry.into_mut(),
+                                        Entry::Vacant(entry) => {
+                                            let namespace = group.cr_ns()?;
+                                            let text = if kind == "Secret" {
+                                                let secret = client
+                                                    .namespaced::<Secret>(&namespace)
+                                                    .api()
+                                                    .get(name)
+                                                    .await?;
+                                                let data = secret
+                                                    .data
+                                                    .as_ref()
+                                                    .and_then(|data| data.get(key))
+                                                    .ok_or_else(|| {
+                                                        invalid(format!("Secret {namespace}/{name} has no key {key}"))
+                                                    })?;
+                                                String::from_utf8(data.0.clone()).map_err(|_| {
+                                                    invalid(format!("Secret {namespace}/{name} key {key} is not UTF-8"))
+                                                })?
+                                            } else {
+                                                let config_map = client
+                                                    .namespaced::<ConfigMap>(&namespace)
+                                                    .api()
+                                                    .get(name)
+                                                    .await?;
+                                                config_map
+                                                    .data
+                                                    .and_then(|mut data| data.remove(key))
+                                                    .ok_or_else(|| {
+                                                        invalid(format!("ConfigMap {namespace}/{name} has no key {key}"))
+                                                    })?
+                                            };
+                                            if text.chars().any(char::is_control) {
+                                                return Err(invalid(format!(
+                                                    "control character in {kind} {namespace}/{name} key {key}"
+                                                )));
+                                            }
+                                            entry.insert(text)
+                                        }
+                                    };
+                                    value.push_str(&source.replace('%', "%%"));
+                                }
+                            }
+                        }
                         if value.is_empty() {
                             writeln!(config, "  http-request del-header {name}").unwrap();
                         } else {
-                            writeln!(
-                                config,
-                                "  http-request set-header {name} {}",
-                                literal(value)
-                            )
-                            .unwrap();
+                            writeln!(config, "  http-request set-header {name} {}", quote(&value))
+                                .unwrap();
                         }
                     }
                     write!(config, "  server upstream {host}:{port}").unwrap();

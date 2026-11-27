@@ -81,6 +81,6 @@ spec:
                       headers:
                         type: object
                         minProperties: 1
-                        description: Request headers added to the proxied request. A header set to an empty string is removed.
+                        description: Header templates with secret[name][key] or cm[name][key] placeholders in braces, and remote_host for the client IP. Sources are in the IngressGroup namespace. Double braces escape literal braces. An empty result removes the header.
                         additionalProperties:
                           type: string

@@ -1,7 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::haproxy::{backend_url, dns_name, invalid},
+    support::haproxy::{HeaderTemplate, backend_url, dns_name, invalid},
 };
 use ech_k8s::{CrMeta, K8sClient, NodeState, Reconciler};
 use kube::{ResourceExt, api::ListParams};
@@ -84,13 +84,13 @@ impl Reconciler for ValidateReconciler {
                     || !name
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
-                    || value.chars().any(char::is_control)
                     || !headers.insert(name.to_ascii_lowercase())
                 {
                     return Err(invalid(format!(
                         "invalid or duplicate request header {name}"
                     )));
                 }
+                HeaderTemplate::new(value)?;
             }
         }
         if group

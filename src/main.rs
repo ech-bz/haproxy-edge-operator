@@ -12,7 +12,7 @@ use ech_k8s::{Operator, OperatorSpec, RuntimeSettings};
 use error::{OperatorError, Result};
 use k8s_openapi::api::{
     apps::v1::DaemonSet,
-    core::v1::{Namespace, Node, Secret, Service},
+    core::v1::{ConfigMap, Namespace, Node, Secret, Service},
     networking::v1::Ingress,
 };
 use kube::{
@@ -29,7 +29,7 @@ use std::{
 };
 use support::{
     components::{GROUP, OWNER},
-    watches::managed,
+    watches::{managed, referenced},
 };
 use tokio::{
     process::{Child, Command},
@@ -269,6 +269,8 @@ async fn main() -> Result<()> {
                     let services = controller.store();
                     let issuers = controller.store();
                     let solvers = controller.store();
+                    let secrets = controller.store();
+                    let config_maps = controller.store();
                     let previous = Mutex::new(HashMap::<String, String>::new());
                     let owned = watcher::Config::default().labels(OWNER);
                     controller
@@ -353,7 +355,16 @@ async fn main() -> Result<()> {
                                     .collect::<Vec<_>>()
                             },
                         )
-                        .watches(client.all::<Secret>().into_inner(), owned.clone(), managed)
+                        .watches(
+                            client.all::<Secret>().into_inner(),
+                            watcher::Config::default(),
+                            move |secret: Secret| referenced(secret, &secrets),
+                        )
+                        .watches(
+                            client.all::<ConfigMap>().into_inner(),
+                            watcher::Config::default(),
+                            move |config_map: ConfigMap| referenced(config_map, &config_maps),
+                        )
                         .watches(
                             client.all::<Certificate>().into_inner(),
                             owned.clone(),
