@@ -41,7 +41,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_target(false)
         .compact()
         .init();
@@ -87,7 +87,13 @@ async fn main() -> Result<()> {
                                 .arg("-f")
                                 .arg(generation.join("haproxy.cfg"))
                                 .output()
-                                .await?;
+                                .await
+                                .map_err(|error| {
+                                    OperatorError::Config(format!(
+                                        "cannot run {}: {error}",
+                                        settings.haproxy
+                                    ))
+                                })?;
                             if !output.status.success() {
                                 return Err(OperatorError::Config(format!(
                                     "HAProxy rejected bundle: {}",
@@ -105,9 +111,18 @@ async fn main() -> Result<()> {
                             for address in
                                 listeners(&fs::read_to_string(generation.join("haproxy.cfg"))?)?
                             {
-                                drop(TcpListener::bind((address.ip(), 0))?);
+                                drop(TcpListener::bind((address.ip(), 0)).map_err(|error| {
+                                    OperatorError::Config(format!(
+                                        "cannot bind local IP {}: {error}",
+                                        address.ip()
+                                    ))
+                                })?);
                                 if !previous_listeners.contains(&address) {
-                                    drop(TcpListener::bind(address)?);
+                                    drop(TcpListener::bind(address).map_err(|error| {
+                                        OperatorError::Config(format!(
+                                            "cannot bind listener {address}: {error}"
+                                        ))
+                                    })?);
                                 }
                             }
                             switch(&settings.state, &generation)?;
@@ -213,7 +228,14 @@ async fn main() -> Result<()> {
         "ready" => {
             let settings = Settings::load();
             let (desired, _) = bundle(&settings.bundle)?;
-            if fs::read_to_string(settings.state.join("applied"))? != desired {
+            let path = settings.state.join("applied");
+            let applied = fs::read_to_string(&path).map_err(|error| {
+                OperatorError::Config(format!(
+                    "HAProxy configuration has not been applied ({}): {error}",
+                    path.display()
+                ))
+            })?;
+            if applied != desired {
                 return Err(OperatorError::Config(
                     "HAProxy bundle has not been applied".into(),
                 ));

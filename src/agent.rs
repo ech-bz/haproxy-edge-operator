@@ -40,7 +40,12 @@ pub(crate) fn bundle(path: &Path) -> Result<(String, BTreeMap<String, Vec<u8>>)>
         .map(|target| path.join(target))
         .unwrap_or_else(|_| path.into());
     let mut files = BTreeMap::new();
-    for entry in fs::read_dir(snapshot)? {
+    for entry in fs::read_dir(&snapshot).map_err(|error| {
+        OperatorError::Config(format!(
+            "cannot read HAProxy bundle {}: {error}",
+            snapshot.display()
+        ))
+    })? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if !name.starts_with('.') && entry.file_type()?.is_file() {
@@ -55,7 +60,13 @@ pub(crate) fn bundle(path: &Path) -> Result<(String, BTreeMap<String, Vec<u8>>)>
 
 pub(crate) async fn master(state: &Path, command: &str) -> Result<String> {
     timeout(Duration::from_secs(10), async {
-        let mut socket = UnixStream::connect(state.join("master.sock")).await?;
+        let path = state.join("master.sock");
+        let mut socket = UnixStream::connect(&path).await.map_err(|error| {
+            OperatorError::Config(format!(
+                "cannot connect to HAProxy master socket {}: {error}",
+                path.display()
+            ))
+        })?;
         socket.write_all(format!("{command}\n").as_bytes()).await?;
         socket.shutdown().await?;
         let mut response = String::new();
