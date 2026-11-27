@@ -671,6 +671,7 @@ dependencies = [
  "envy",
  "futures",
  "hex",
+ "http",
  "ipnet",
  "k8s-openapi",
  "kopium",

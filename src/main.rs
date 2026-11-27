@@ -305,7 +305,8 @@ async fn main() -> Result<()> {
                                             .get("acme.cert-manager.io/http01-solver")
                                             .is_some_and(|value| value == "true")
                                             || cr.spec.routes.iter().flatten().any(|route| {
-                                                route.service_name == service.name_any()
+                                                route.service_name.as_deref()
+                                                    == Some(service.name_any().as_str())
                                                     && route
                                                         .service_namespace
                                                         .clone()

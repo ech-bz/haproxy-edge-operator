@@ -4,7 +4,7 @@ use crate::{
     error::{OperatorError, Result},
     support::{
         components::*,
-        haproxy::{dns_name, invalid},
+        haproxy::{backend_url, dns_name, invalid},
         resources::{edge_nodes, metadata, owner},
     },
 };
@@ -287,40 +287,65 @@ frontend http
                 }
                 config.push_str("  default_backend unmatched\n");
                 for (index, route) in routes.iter().enumerate() {
-                    let namespace = route.service_namespace.clone().unwrap_or(group.cr_ns()?);
-                    let service = client
-                        .namespaced::<Service>(&namespace)
-                        .api()
-                        .get(&route.service_name)
-                        .await?;
-                    let port = service
-                        .spec
-                        .as_ref()
-                        .and_then(|spec| spec.ports.as_ref())
-                        .and_then(|ports| {
-                            ports.iter().find(|port| {
-                                port.port as i64 == route.service_port
-                                    && port.protocol.as_deref().unwrap_or("TCP") == "TCP"
+                    let url = route.url.as_deref().map(backend_url).transpose()?;
+                    let (host, port, scheme) = if let Some(url) = &url {
+                        let scheme = url.scheme_str().unwrap();
+                        (
+                            url.host().unwrap().to_string(),
+                            i64::from(url.port_u16().unwrap_or(if scheme == "https" {
+                                443
+                            } else {
+                                80
+                            })),
+                            scheme,
+                        )
+                    } else {
+                        let name = route
+                            .service_name
+                            .as_deref()
+                            .ok_or_else(|| invalid("missing serviceName"))?;
+                        let number = route
+                            .service_port
+                            .ok_or_else(|| invalid("missing servicePort"))?;
+                        let namespace = route.service_namespace.clone().unwrap_or(group.cr_ns()?);
+                        let service = client
+                            .namespaced::<Service>(&namespace)
+                            .api()
+                            .get(name)
+                            .await?;
+                        let port = service
+                            .spec
+                            .as_ref()
+                            .and_then(|spec| spec.ports.as_ref())
+                            .and_then(|ports| {
+                                ports.iter().find(|port| {
+                                    port.port as i64 == number
+                                        && port.protocol.as_deref().unwrap_or("TCP") == "TCP"
+                                })
                             })
-                        })
-                        .ok_or_else(|| {
-                            invalid(format!(
-                                "Service {namespace}/{} has no TCP port {}",
-                                route.service_name, route.service_port
-                            ))
-                        })?;
-                    let scheme = route.service_scheme.as_deref().unwrap_or_else(|| {
-                        if route.service_port == 443
-                            || port
-                                .name
-                                .as_deref()
-                                .is_some_and(|name| name.starts_with("https"))
-                        {
-                            "https"
-                        } else {
-                            "http"
-                        }
-                    });
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "Service {namespace}/{name} has no TCP port {number}"
+                                ))
+                            })?;
+                        let scheme = route.service_scheme.as_deref().unwrap_or_else(|| {
+                            if number == 443
+                                || port
+                                    .name
+                                    .as_deref()
+                                    .is_some_and(|name| name.starts_with("https"))
+                            {
+                                "https"
+                            } else {
+                                "http"
+                            }
+                        });
+                        (
+                            format!("{name}.{namespace}.svc.{}", self.operator.cluster_domain),
+                            number,
+                            scheme,
+                        )
+                    };
                     writeln!(config, "\nbackend route_{index}").unwrap();
                     if route.strip_prefix.unwrap_or(false) {
                         writeln!(
@@ -336,6 +361,23 @@ frontend http
                         )
                         .unwrap();
                     }
+                    if let Some(url) = &url {
+                        writeln!(
+                            config,
+                            "  http-request set-header Host {}",
+                            literal(url.authority().unwrap().as_str())
+                        )
+                        .unwrap();
+                        let path = url.path().trim_end_matches('/');
+                        if !path.is_empty() {
+                            writeln!(
+                                config,
+                                "  http-request set-path {}",
+                                quote(&format!("{}%[path]", path.replace('%', "%%")))
+                            )
+                            .unwrap();
+                        }
+                    }
                     for (name, value) in route.headers.iter().flatten() {
                         if value.is_empty() {
                             writeln!(config, "  http-request del-header {name}").unwrap();
@@ -348,18 +390,19 @@ frontend http
                             .unwrap();
                         }
                     }
-                    let host = format!(
-                        "{}.{namespace}.svc.{}",
-                        route.service_name, self.operator.cluster_domain
-                    );
-                    write!(
-                        config,
-                        "  server upstream {host}:{} resolvers kubernetes init-addr last,libc,none",
-                        route.service_port
-                    )
-                    .unwrap();
+                    write!(config, "  server upstream {host}:{port}").unwrap();
+                    let name = host.trim_matches(['[', ']']);
+                    let ip = name.parse::<std::net::IpAddr>().is_ok();
+                    if !ip {
+                        config.push_str(" resolvers kubernetes init-addr last,libc,none");
+                    }
                     match scheme {
-                        "https" => write!(config, " ssl verify required ca-file /etc/ssl/certs/ca-certificates.crt sni str({host}) verifyhost {host} alpn h2,http/1.1").unwrap(),
+                        "https" => {
+                            write!(config, " ssl verify required ca-file /etc/ssl/certs/ca-certificates.crt verifyhost {name} alpn h2,http/1.1").unwrap();
+                            if !ip {
+                                write!(config, " sni str({host})").unwrap();
+                            }
+                        }
                         "h2c" => config.push_str(" proto h2"),
                         _ => {}
                     }

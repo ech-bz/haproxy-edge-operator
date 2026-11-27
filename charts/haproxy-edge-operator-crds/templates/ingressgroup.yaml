@@ -43,11 +43,21 @@ spec:
                   description: Path routes owned by this group.
                   items:
                     type: object
-                    required: [pathPrefix, serviceName, servicePort]
+                    required: [pathPrefix]
+                    x-kubernetes-validations:
+                      - rule: 'has(self.url) ? !(has(self.serviceName) || has(self.servicePort) || has(self.serviceNamespace) || has(self.serviceScheme)) : has(self.serviceName) && has(self.servicePort)'
+                        message: Specify either url or serviceName and servicePort. Service fields cannot be combined with url.
                     properties:
                       pathPrefix:
                         type: string
                         description: Case-sensitive string prefix.
+                      url:
+                        type: string
+                        description: >-
+                          HTTP or HTTPS backend URL without credentials, query or fragment.
+                          HTTPS verifies the upstream certificate using system CAs and the URL host.
+                          The URL path is prepended after stripPrefix; the request query is preserved.
+                          Host is set from the URL before custom headers.
                       serviceName:
                         type: string
                       serviceNamespace:

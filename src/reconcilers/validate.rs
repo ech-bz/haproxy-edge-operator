@@ -1,7 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::haproxy::{dns_name, invalid},
+    support::haproxy::{backend_url, dns_name, invalid},
 };
 use ech_k8s::{CrMeta, K8sClient, NodeState, Reconciler};
 use kube::{ResourceExt, api::ListParams};
@@ -53,22 +53,32 @@ impl Reconciler for ValidateReconciler {
                     route.path_prefix
                 )));
             }
-            if !dns_name(&route.service_name)
-                || route.service_name.contains('.')
-                || route
-                    .service_namespace
-                    .as_deref()
-                    .is_some_and(|ns| !dns_name(ns) || ns.contains('.'))
-                || !(1..=65535).contains(&route.service_port)
-            {
-                return Err(invalid("invalid backend service reference"));
-            }
-            if route
-                .service_scheme
-                .as_deref()
-                .is_some_and(|scheme| !["http", "https", "h2c"].contains(&scheme))
-            {
-                return Err(invalid("unsupported backend scheme"));
+            match (&route.url, &route.service_name, route.service_port) {
+                (Some(url), None, None)
+                    if route.service_namespace.is_none() && route.service_scheme.is_none() =>
+                {
+                    backend_url(url)?;
+                }
+                (None, Some(name), Some(port)) => {
+                    if !dns_name(name)
+                        || name.contains('.')
+                        || route
+                            .service_namespace
+                            .as_deref()
+                            .is_some_and(|ns| !dns_name(ns) || ns.contains('.'))
+                        || !(1..=65535).contains(&port)
+                    {
+                        return Err(invalid("invalid backend service reference"));
+                    }
+                    if route
+                        .service_scheme
+                        .as_deref()
+                        .is_some_and(|scheme| !["http", "https", "h2c"].contains(&scheme))
+                    {
+                        return Err(invalid("unsupported backend scheme"));
+                    }
+                }
+                _ => return Err(invalid("specify either url or serviceName and servicePort")),
             }
             let mut headers = BTreeSet::new();
             for (name, value) in route.headers.iter().flatten() {
