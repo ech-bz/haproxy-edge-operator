@@ -56,7 +56,12 @@ spec:
                         type: array
                         items:
                           type: object
-                          required: [pathPrefix, url]
+                          required: [pathPrefix]
+                          x-kubernetes-validations:
+                            - rule: "has(self.url) != has(self.redirect)"
+                              message: Exactly one of url or redirect is required
+                            - rule: "!has(self.redirect) || (!has(self.stripPrefix) && !has(self.headers))"
+                              message: stripPrefix and headers apply only to proxy routes
                           properties:
                             pathPrefix:
                               type: string
@@ -70,6 +75,20 @@ spec:
                                 HTTPS verifies the upstream certificate using system CAs and the URL host.
                                 The URL path is prepended after stripPrefix; the request query is preserved.
                                 Host is set from the URL before custom headers.
+                            redirect:
+                              type: object
+                              required: [url]
+                              properties:
+                                url:
+                                  type: string
+                                  description: Absolute HTTP or HTTPS destination prefix without query or fragment. The original request path and query are appended.
+                                code:
+                                  type: integer
+                                  minimum: 301
+                                  maximum: 308
+                                  not:
+                                    enum: [304, 305, 306]
+                                  description: Redirect status code. Defaults to 308.
                             stripPrefix:
                               type: boolean
                               description: When true, pathPrefix is removed before forwarding to the backend.

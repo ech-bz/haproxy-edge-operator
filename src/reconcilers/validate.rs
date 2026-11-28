@@ -88,7 +88,26 @@ impl Reconciler for ValidateReconciler {
                         route.path_prefix
                     )));
                 }
-                BackendUrl::new(&route.url)?;
+                match (&route.url, &route.redirect) {
+                    (Some(url), None) => {
+                        BackendUrl::new(url)?;
+                    }
+                    (None, Some(redirect)) => {
+                        let BackendUrl(url) = BackendUrl::new(&redirect.url)?;
+                        if !matches!(url.scheme_str(), Some("http" | "https"))
+                            || !matches!(redirect.code.unwrap_or(308), 301 | 302 | 303 | 307 | 308)
+                            || route.strip_prefix.is_some()
+                            || route.headers.is_some()
+                        {
+                            return Err(OperatorError::Config("redirect requires HTTP or HTTPS, a valid redirect code, and no stripPrefix or headers".into()));
+                        }
+                    }
+                    _ => {
+                        return Err(OperatorError::Config(
+                            "route requires exactly one of url or redirect".into(),
+                        ));
+                    }
+                }
                 let mut headers = BTreeSet::new();
                 for (name, value) in route.headers.iter().flatten() {
                     if name.is_empty()

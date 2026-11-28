@@ -99,6 +99,29 @@ impl Reconciler for BundleReconciler {
         if !has_exact && !host_acls.is_empty() {
             host_acls.push_str("  acl exact_host always_false\n");
         }
+        let routing = |tls: bool| {
+            let mut rules = host_acls.clone();
+            for (index, (host, route)) in routes.iter().enumerate() {
+                let backend = if tls || route.redirect.is_some() {
+                    format!("route_{index}")
+                } else {
+                    "unmatched".into()
+                };
+                let condition = conditions[*host]
+                    .iter()
+                    .map(|condition| {
+                        format!(
+                            "{condition} {{ path_beg -- {} }}",
+                            quote(&route.path_prefix)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                writeln!(rules, "  use_backend {backend} if {condition}").unwrap();
+            }
+            rules.push_str("  default_backend unmatched\n");
+            rules
+        };
         let nodes = group.edge_nodes(client).await?;
         let mut solvers = client
             .all::<Ingress>()
@@ -249,8 +272,20 @@ frontend http
                     }
                 }
             }
-            config.push_str("  default_backend unmatched\n");
+            config.push_str(&routing(false));
             config.push_str(&backends);
+            for (index, (_, route)) in routes.iter().enumerate() {
+                if let Some(redirect) = &route.redirect {
+                    BackendUrl::new(&redirect.url)?;
+                    writeln!(
+                        config,
+                        "\nbackend route_{index}\n  http-request redirect prefix {} code {}",
+                        literal(redirect.url.trim_end_matches('/')),
+                        redirect.code.unwrap_or(308)
+                    )
+                    .unwrap();
+                }
+            }
             config.push_str("\nbackend unmatched\n  http-request deny deny_status 404\n");
             if !list.is_empty() {
                 let ech = if !covers.is_empty() {
@@ -324,23 +359,12 @@ frontend http
                 config.push_str(r#"  http-request set-header X-Forwarded-For "%[req.hdr(X-Forwarded-For)], %[src]" if { req.hdr(X-Forwarded-For) -m found }
   http-request set-header X-Forwarded-For %[src] unless { req.hdr(X-Forwarded-For) -m found }
 "#);
-                config.push_str(&host_acls);
-                for (index, (host, route)) in routes.iter().enumerate() {
-                    let condition = conditions[*host]
-                        .iter()
-                        .map(|condition| {
-                            format!(
-                                "{condition} {{ path_beg -- {} }}",
-                                quote(&route.path_prefix)
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" or ");
-                    writeln!(config, "  use_backend route_{index} if {condition}").unwrap();
-                }
-                config.push_str("  default_backend unmatched\n");
+                config.push_str(&routing(true));
                 for (index, (_, route)) in routes.iter().enumerate() {
-                    let BackendUrl(url) = BackendUrl::new(&route.url)?;
+                    let Some(url) = &route.url else {
+                        continue;
+                    };
+                    let BackendUrl(url) = BackendUrl::new(url)?;
                     let scheme = url.scheme_str().unwrap();
                     let host = url.host().unwrap();
                     let port = url
