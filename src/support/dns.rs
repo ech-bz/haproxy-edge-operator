@@ -1,11 +1,25 @@
 use crate::{
     crds::{DomainClaim, IngressGroup},
     error::{OperatorError, Result},
-    support::{components::DnsComponent, domain::DomainName},
+    support::{
+        components::{DnsComponent, ResourceId, UnsSignerComponent},
+        domain::DomainName,
+    },
+};
+use alloy::{
+    consensus::{SignableTransaction, TxEip1559, TxEnvelope},
+    eips::eip2718::Encodable2718,
+    primitives::{B256, Bytes, TxKind, U256, address, keccak256},
+    signers::{SignerSync, local::PrivateKeySigner},
+    sol,
+    sol_types::SolCall,
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, ResourcesExt};
 use k8s_openapi::{ByteString, api::core::v1::Secret};
-use kube::{ResourceExt, api::ListParams};
+use kube::{
+    ResourceExt,
+    api::{ListParams, ObjectMeta, PostParams},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -14,6 +28,73 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
+
+sol! {
+    function get(string key, uint256 tokenId) external view returns (string);
+    function set(string key, string value, uint256 tokenId) external;
+    function isApprovedOrOwner(address spender, uint256 tokenId) external view returns (bool);
+}
+
+const UNS_RPC: &str = "https://mainnet.base.org";
+const UNS_CHAIN_ID: u64 = 8453;
+const UNS_REGISTRY: alloy::primitives::Address =
+    address!("f6c1b83977de3deffc476f5048a0a84d3375d498");
+
+struct Rpc {
+    client: reqwest::Client,
+}
+
+impl Rpc {
+    async fn contract<C: SolCall>(&self, call: C, name: &str) -> Result<C::Return> {
+        let data = format!("0x{}", hex::encode(call.abi_encode()));
+        let result = self
+            .call(
+                "eth_call",
+                json!([{"to": UNS_REGISTRY.to_string(), "data": data}, "latest"]),
+            )
+            .await?;
+        let bytes: Bytes = result
+            .as_str()
+            .unwrap_or_default()
+            .parse()
+            .map_err(|_| OperatorError::Config(format!("invalid UNS {name} response")))?;
+        C::abi_decode_returns(&bytes)
+            .map_err(|_| OperatorError::Config(format!("invalid UNS {name} result")))
+    }
+
+    async fn call(&self, method: &str, params: Value) -> Result<Value> {
+        let result: Value = self
+            .client
+            .post(UNS_RPC)
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
+            .send()
+            .await
+            .map_err(|_| OperatorError::Config(format!("UNS {method}: request failed")))?
+            .error_for_status()
+            .map_err(|_| OperatorError::Config(format!("UNS {method}: HTTP failure")))?
+            .json()
+            .await
+            .map_err(|_| OperatorError::Config(format!("UNS {method}: invalid response")))?;
+        if result.get("error").is_some() || result.get("result").is_none() {
+            return Err(OperatorError::Config(format!("UNS {method}: RPC failure")));
+        }
+        Ok(result["result"].clone())
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct Journal {
+    transaction: Option<Transaction>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Transaction {
+    raw: String,
+    hash: String,
+    domain: String,
+    registry: String,
+    value: String,
+}
 
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(transparent)]
@@ -55,6 +136,7 @@ impl Records {
 #[serde(tag = "backend", content = "config")]
 pub(crate) enum DnsProvider {
     Octodns(Value),
+    Uns(String),
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -109,7 +191,29 @@ impl DnsTarget {
                 .get(&credentials.name)
                 .await?;
             let data = secret.data.unwrap_or_default();
-            let (zone, provider) = {
+            let (zone, provider) = if DomainName::is_uns(&domain) {
+                if domain.contains('*') {
+                    return Err(OperatorError::Config(
+                        "UNS requires concrete domain names".into(),
+                    ));
+                }
+                let key = data.get("uns-private-key").ok_or_else(|| {
+                    OperatorError::Config(format!(
+                        "Secret {}/{} has no uns-private-key",
+                        credentials.namespace, credentials.name
+                    ))
+                })?;
+                let key = std::str::from_utf8(&key.0)
+                    .map_err(|_| OperatorError::Config("invalid UNS private key encoding".into()))?
+                    .trim()
+                    .to_string();
+                key.parse::<PrivateKeySigner>()
+                    .map_err(|_| OperatorError::Config("invalid UNS private key".into()))?;
+                (
+                    domain.rsplit('.').next().unwrap_or_default().into(),
+                    DnsProvider::Uns(key),
+                )
+            } else {
                 let provider: Value = serde_json::from_slice(
                     &data
                         .get("provider.json")
@@ -171,6 +275,8 @@ impl DnsTarget {
             && self.secret_name == other.secret_name
             && match (&self.provider, &other.provider) {
                 (DnsProvider::Octodns(a), DnsProvider::Octodns(b)) => a["class"] == b["class"],
+                (DnsProvider::Uns(_), DnsProvider::Uns(_)) => true,
+                _ => false,
             }
     }
 }
@@ -261,6 +367,228 @@ impl DnsState {
                 continue;
             }
             let (outcome, effective_ttl) = match &state.target.provider {
+                DnsProvider::Uns(private_key) => {
+                    let outcome: NodeState = async {
+                    let namespace = state.target.state_namespace.as_str();
+                    let zone = state.target.zone.as_str();
+                    let records = &state.records;
+                    let previous = &state.previous;
+                    let quantity = |value: &Value| -> Result<u128> {
+                        value
+                            .as_str()
+                            .and_then(|value| value.strip_prefix("0x"))
+                            .and_then(|value| u128::from_str_radix(value, 16).ok())
+                            .ok_or_else(|| OperatorError::Config("invalid UNS RPC quantity".into()))
+                    };
+                    let signer: PrivateKeySigner = private_key.parse()
+                        .map_err(|_| OperatorError::Config("invalid UNS private key".into()))?;
+                    let rpc = Rpc {
+                        client: reqwest::Client::builder()
+                            .timeout(Duration::from_secs(15))
+                            .build()
+                            .map_err(|_| OperatorError::Config("cannot create UNS RPC client".into()))?,
+                    };
+                    if quantity(&rpc.call("eth_chainId", json!([])).await?)? != u128::from(UNS_CHAIN_ID) {
+                        return Err(OperatorError::Config("UNS RPC chain ID mismatch".into()));
+                    }
+                    let secrets = client.namespaced::<Secret>(namespace);
+                    let journal_name =
+                        UnsSignerComponent.name(ResourceId::new(format!("{}:{}", UNS_CHAIN_ID, signer.address())).to_string());
+                    let mut secret = match secrets.api().get_opt(&journal_name).await? {
+                        Some(secret) => secret,
+                        None => {
+                            let desired = Secret {
+                                metadata: ObjectMeta {
+                                    name: Some(journal_name.clone()),
+                                    namespace: Some(namespace.into()),
+                                    labels: Some(UnsSignerComponent.labels(ResourceId::new(signer.address()).to_string())),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            };
+                            match secrets.api().create(&PostParams::default(), &desired).await {
+                                Ok(secret) => secret,
+                                Err(kube::Error::Api(status)) if status.code == 409 => {
+                                    return Ok(NodeState::Pending);
+                                }
+                                Err(error) => return Err(error.into()),
+                            }
+                        }
+                    };
+                    let mut journal: Journal = secret
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("state.json"))
+                        .map(|data| serde_json::from_slice(&data.0))
+                        .transpose()?
+                        .unwrap_or_default();
+                    if let Some(transaction) = &journal.transaction {
+                        let receipt = rpc
+                            .call("eth_getTransactionReceipt", json!([transaction.hash]))
+                            .await?;
+                        if receipt.is_null() {
+                            if rpc
+                                .call("eth_getTransactionByHash", json!([transaction.hash]))
+                                .await?
+                                .is_null()
+                                && rpc
+                                    .call("eth_sendRawTransaction", json!([transaction.raw]))
+                                    .await
+                                    .is_err()
+                                && rpc
+                                    .call("eth_getTransactionByHash", json!([transaction.hash]))
+                                    .await?
+                                    .is_null()
+                            {
+                                return Err(OperatorError::Config(format!(
+                                    "UNS transaction {} is saved; submission will be retried",
+                                    transaction.hash
+                                )));
+                            }
+                            return Ok(NodeState::Pending);
+                        }
+                        let block = quantity(&receipt["blockNumber"])?;
+                        let head = quantity(&rpc.call("eth_blockNumber", json!([])).await?)?;
+                        if head.saturating_sub(block) + 1 < u128::from(2_u64) {
+                            return Ok(NodeState::Pending);
+                        }
+                        let success = quantity(&receipt["status"])? == 1;
+                        let tx_hash = transaction.hash.clone();
+                        journal.transaction = None;
+                        secret.data = Some(BTreeMap::from([(
+                            "state.json".into(),
+                            ByteString(serde_json::to_vec(&journal)?),
+                        )]));
+                        match secrets
+                            .api()
+                            .replace(&journal_name, &PostParams::default(), &secret)
+                            .await
+                        {
+                            Ok(_) => (),
+                            Err(kube::Error::Api(status)) if status.code == 409 => {
+                                return Ok(NodeState::Pending);
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
+                        if !success {
+                            return Err(OperatorError::Config(format!("UNS transaction {tx_hash} reverted")));
+                        }
+                        return Ok(NodeState::Pending);
+                    }
+                    let names: BTreeSet<_> = records.keys().chain(previous.keys()).collect();
+                    for name in names {
+                        let domain = if name.is_empty() {
+                            zone.to_string()
+                        } else {
+                            format!("{name}.{zone}")
+                        };
+                        let mut node = B256::ZERO;
+                        for label in domain.rsplit('.') {
+                            node =
+                                keccak256([node.as_slice(), keccak256(label.as_bytes()).as_slice()].concat());
+                        }
+                        let token_id = U256::from_be_bytes(node.0);
+                        let desired = records.record_values(Some(name), &["A"]);
+                        let value = serde_json::to_string(&desired)?;
+                        let current = rpc.contract(getCall {
+                            key: "dns.A".into(),
+                            tokenId: token_id,
+                        }, "dns.A").await?;
+                        let current_ips: Option<BTreeSet<String>> = if current.is_empty() {
+                            Some(BTreeSet::new())
+                        } else {
+                            serde_json::from_str(&current).ok()
+                        };
+                        if current_ips.as_ref() == Some(&desired) {
+                            continue;
+                        }
+                        if desired.is_empty() {
+                            let owned = previous.record_values(Some(name), &["A"]);
+                            if current_ips.as_ref() != Some(&owned) {
+                                return Err(OperatorError::Config(format!(
+                                    "UNS dns.A for {domain} changed outside this operator; refusing cleanup"
+                                )));
+                            }
+                        }
+                        if !rpc.contract(isApprovedOrOwnerCall {
+                            spender: signer.address(),
+                            tokenId: token_id,
+                        }, "ownership").await?
+                        {
+                            return Err(OperatorError::Config(format!(
+                                "UNS signer is not authorized for {domain}"
+                            )));
+                        }
+                        let input = setCall {
+                            key: "dns.A".into(),
+                            value: value.clone(),
+                            tokenId: token_id,
+                        }
+                        .abi_encode();
+                        let nonce = u64::try_from(quantity(
+                            &rpc.call(
+                                "eth_getTransactionCount",
+                                json!([signer.address().to_string(), "pending"]),
+                            )
+                            .await?,
+                        )?)
+                        .map_err(|_| OperatorError::Config("invalid UNS nonce".into()))?;
+                        let block = rpc
+                            .call("eth_getBlockByNumber", json!(["latest", false]))
+                            .await?;
+                        let priority = quantity(&rpc.call("eth_maxPriorityFeePerGas", json!([])).await?)?;
+                        let fee = quantity(&block["baseFeePerGas"])?
+                            .checked_mul(2)
+                            .and_then(|fee| fee.checked_add(priority))
+                            .ok_or_else(|| OperatorError::Config("UNS fee overflow".into()))?;
+                        let gas = quantity(&rpc.call("eth_estimateGas", json!([{"from": signer.address().to_string(), "to": UNS_REGISTRY.to_string(), "data": format!("0x{}", hex::encode(&input))}])).await?)?;
+                        let transaction = TxEip1559 {
+                            chain_id: UNS_CHAIN_ID,
+                            nonce,
+                            gas_limit: u64::try_from(
+                                gas.checked_mul(125)
+                                    .ok_or_else(|| OperatorError::Config("UNS gas overflow".into()))?
+                                    / 100,
+                            )
+                            .map_err(|_| OperatorError::Config("invalid UNS gas limit".into()))?,
+                            max_fee_per_gas: fee,
+                            max_priority_fee_per_gas: priority,
+                            to: TxKind::Call(UNS_REGISTRY),
+                            input: input.into(),
+                            ..Default::default()
+                        };
+                        let signature = signer
+                            .sign_hash_sync(&transaction.signature_hash())
+                            .map_err(|_| OperatorError::Config("UNS transaction signing failed".into()))?;
+                        let envelope: TxEnvelope = transaction.into_signed(signature).into();
+                        let raw = envelope.encoded_2718();
+                        journal.transaction = Some(Transaction {
+                            raw: format!("0x{}", hex::encode(&raw)),
+                            hash: keccak256(&raw).to_string(),
+                            domain,
+                            registry: UNS_REGISTRY.to_string(),
+                            value,
+                        });
+                        secret.data = Some(BTreeMap::from([(
+                            "state.json".into(),
+                            ByteString(serde_json::to_vec(&journal)?),
+                        )]));
+                        match secrets
+                            .api()
+                            .replace(&journal_name, &PostParams::default(), &secret)
+                            .await
+                        {
+                            Ok(_) => return Ok(NodeState::Pending),
+                            Err(kube::Error::Api(status)) if status.code == 409 => {
+                                return Ok(NodeState::Pending);
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                    Ok(NodeState::Ready)
+                }.await?;
+                    (outcome, state.target.ttl as u64)
+                }
                 DnsProvider::Octodns(provider) => {
                     let ttl = Octodns(provider).request(json!({"zone": state.target.zone, "owner": state.target.claim_uid, "records": state.records, "previous": state.previous})).await?.as_u64().ok_or_else(|| OperatorError::Config("invalid octoDNS TTL response".into()))?;
                     (NodeState::Ready, ttl)

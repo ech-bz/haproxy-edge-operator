@@ -38,7 +38,7 @@ spec:
                 credentialsSecretRef:
                   type: object
                   required: [name, namespace]
-                  description: Secret with octoDNS provider.json configuration.
+                  description: Secret with provider.json for ICANN domains or uns-private-key for .u domains.
                   properties:
                     name: {type: string, minLength: 1}
                     namespace: {type: string, minLength: 1}

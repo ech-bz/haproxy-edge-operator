@@ -84,6 +84,10 @@ pub(crate) struct DomainClaimComponent {
 }
 
 #[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "uns-signer")]
+pub(crate) struct UnsSignerComponent;
+
+#[derive(Clone, Copy, Serialize, Component)]
 #[component(name = "ech")]
 pub(crate) struct EchComponent;
 

@@ -1,7 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::dns::{DnsState, DnsTarget, Records},
+    support::dns::{DnsProvider, DnsState, DnsTarget, Records},
 };
 use ech_k8s::{K8sClient, NodeState, Reconciler};
 use serde::Serialize;
@@ -47,9 +47,15 @@ impl Reconciler for AddressDnsReconciler {
                 }
             };
             let state = &mut states[index];
-            let tls = state.initialized;
+            let uns = matches!(target.provider, DnsProvider::Uns(_));
+            let tls = state.initialized || uns;
             let mut addresses = BTreeSet::new();
             for node in &nodes {
+                if uns && !node.ip.is_ipv4() {
+                    return Err(OperatorError::Config(
+                        "UNS dns.A requires IPv4 edge addresses".into(),
+                    ));
+                }
                 if node.applied_bundle(client, group, tls).await?.is_some() {
                     addresses.insert(node.ip);
                 }

@@ -33,12 +33,15 @@ impl Reconciler for ValidateReconciler {
             }
         }
         if let Some(cover) = group.ech_cover()? {
-            if cover.starts_with("*.") {
+            if DomainName::is_uns(&cover) || cover.starts_with("*.") {
                 return Err(OperatorError::Config(
                     "ECH cover must be a concrete ICANN domain".into(),
                 ));
             }
-            if !seen_domains.iter().any(|domain| domain != &cover) {
+            if !seen_domains
+                .iter()
+                .any(|domain| !DomainName::is_uns(domain) && domain != &cover)
+            {
                 return Err(OperatorError::Config(
                     "ECH requires a protected ICANN domain".into(),
                 ));

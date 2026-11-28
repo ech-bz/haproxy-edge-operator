@@ -20,6 +20,61 @@ impl DomainName {
             })
     }
 
+    pub(crate) fn is_uns(domain: &str) -> bool {
+        domain.rsplit_once('.').is_some_and(|(_, tld)| {
+            [
+                "amped",
+                "anyone",
+                "ask",
+                "ath",
+                "bald",
+                "basenji",
+                "bay",
+                "bch",
+                "benji",
+                "bitscrunch",
+                "boomer",
+                "bunni",
+                "caw",
+                "chip",
+                "chomp",
+                "depin",
+                "digibyte",
+                "enigma",
+                "ethermail",
+                "goblin",
+                "gotchi",
+                "her",
+                "horizen",
+                "learn",
+                "lunar",
+                "mooncat",
+                "mumu",
+                "mycircle",
+                "npc",
+                "ohm",
+                "onchain",
+                "pendle",
+                "podcast",
+                "pokt",
+                "privacy",
+                "propykeys",
+                "quantum",
+                "rad",
+                "smobler",
+                "south",
+                "spend",
+                "u",
+                "udtest",
+                "verge",
+                "xec",
+                "xyo",
+                "zano",
+            ]
+            .contains(&tld)
+        })
+    }
+
     pub(crate) fn new(value: &str) -> Result<Self> {
         let (prefix, value) = value
             .strip_prefix("*.")

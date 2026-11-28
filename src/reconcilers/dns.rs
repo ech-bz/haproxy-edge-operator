@@ -1,7 +1,10 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::{components::BundleComponent, dns::DnsState},
+    support::{
+        components::BundleComponent,
+        dns::{DnsProvider, DnsState},
+    },
 };
 use ech_k8s::{Component, K8sClient, NodeState, Reconciler};
 use k8s_openapi::api::core::v1::Secret;
@@ -21,7 +24,11 @@ impl Reconciler for DnsReconciler {
         if states.is_empty() {
             return Ok(NodeState::Pending);
         }
-        let ech = if group.spec.ech.is_some() {
+        let ech = if group.spec.ech.is_some()
+            && states
+                .iter()
+                .any(|state| matches!(state.target.provider, DnsProvider::Octodns(_)))
+        {
             let nodes = group.edge_nodes(client).await?;
             let Some(node) = nodes.first() else {
                 return Ok(NodeState::Pending);
@@ -60,10 +67,10 @@ impl Reconciler for DnsReconciler {
             let mut records = state.records.clone();
             for entries in records.values_mut() {
                 entries.retain(|record| record["type"] != "HTTPS");
-                if let Some(ech) = ech
-                    .as_ref()
-                    .filter(|_| Some(&state.target.domain) != cover.as_ref())
-                {
+                if let Some(ech) = ech.as_ref().filter(|_| {
+                    matches!(state.target.provider, DnsProvider::Octodns(_))
+                        && Some(&state.target.domain) != cover.as_ref()
+                }) {
                     entries.push(json!({"type": "HTTPS", "ttl": state.target.ttl, "value": {"svcpriority": 1, "targetname": ".", "svcparams": {"alpn": ["h2", "http/1.1"], "ech": ech}}}));
                 }
             }

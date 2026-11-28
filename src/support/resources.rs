@@ -162,6 +162,10 @@ impl IngressGroup {
     }
 
     pub(crate) fn icann_domains(&self) -> Result<BTreeSet<String>> {
-        self.domains()
+        Ok(self
+            .domains()?
+            .into_iter()
+            .filter(|domain| !DomainName::is_uns(domain))
+            .collect())
     }
 }
