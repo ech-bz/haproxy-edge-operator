@@ -25,16 +25,14 @@ impl Reconciler for ValidateReconciler {
                 "group name exceeds the node label limit".into(),
             ));
         }
-        let mut domains = BTreeSet::new();
-        for domain in group.spec.domains.as_deref().unwrap_or_default() {
-            if !DomainName::is_valid(domain.strip_prefix("*.").unwrap_or(domain))
-                || !domains.insert(domain)
-            {
-                return Err(OperatorError::Config(format!(
-                    "invalid or duplicate domain {domain}"
-                )));
+        let mut seen_domains = BTreeSet::new();
+        for value in group.spec.domains.iter().flatten() {
+            let domain = DomainName::new(value)?.0;
+            if !seen_domains.insert(domain.clone()) {
+                return Err(OperatorError::Config(format!("duplicate domain {domain}")));
             }
         }
+
         for trusted in group
             .spec
             .forwarded_trusted_ips

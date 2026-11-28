@@ -1,7 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::components::*,
+    support::{components::*, domain::DomainName},
 };
 use ech_k8s::{Component, CrMeta, K8sClient};
 use k8s_openapi::api::{
@@ -12,7 +12,10 @@ use kube::{
     Resource, ResourceExt,
     api::{ListParams, ObjectMeta},
 };
-use std::{collections::BTreeMap, net::IpAddr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+};
 
 pub(crate) struct EdgeNode {
     pub(crate) name: String,
@@ -145,5 +148,19 @@ impl IngressGroup {
             .list(&ListParams::default().labels(&self.selector::<NamespaceComponent>()?))
             .await?
             .items)
+    }
+
+    pub(crate) fn domains(&self) -> Result<BTreeSet<String>> {
+        self.spec
+            .domains
+            .iter()
+            .flatten()
+            .map(String::as_str)
+            .map(|domain| DomainName::new(domain).map(|name| name.0))
+            .collect()
+    }
+
+    pub(crate) fn icann_domains(&self) -> Result<BTreeSet<String>> {
+        self.domains()
     }
 }

@@ -72,3 +72,11 @@ pub(crate) const GROUP: &str = "haproxy.ech.bz/ingress-group";
 pub(crate) const GROUP_NS: &str = "haproxy.ech.bz/ingress-namespace";
 pub(crate) const OWNER: &str = "haproxy.ech.bz/ingress-uid";
 pub(crate) const PUBLIC_IP: &str = "ech.bz/public-ip";
+
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "domain")]
+pub(crate) struct DomainClaimComponent {
+    pub(crate) domain: ResourceId,
+}
+
+pub(crate) const DOMAIN_BINDING: &str = "haproxy.ech.bz/domain-binding";

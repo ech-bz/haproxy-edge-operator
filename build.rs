@@ -11,6 +11,10 @@ const CRDS: &[(&str, &str)] = &[
         "charts/haproxy-edge-operator-crds/templates/ingressgroup.yaml",
         "ingress_group.rs",
     ),
+    (
+        "charts/haproxy-edge-operator-crds/templates/domainclaim.yaml",
+        "domain_claim.rs",
+    ),
 ];
 
 fn main() -> Result<()> {

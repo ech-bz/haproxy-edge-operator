@@ -1,5 +1,8 @@
 #![allow(clippy::all)]
 
+mod domain_claim {
+    include!(concat!(env!("OUT_DIR"), "/domain_claim.rs"));
+}
 mod certificate {
     include!(concat!(env!("OUT_DIR"), "/certificate.rs"));
 }
@@ -12,4 +15,5 @@ mod ingress_group {
 
 pub(crate) use certificate::*;
 pub(crate) use cluster_issuer::ClusterIssuer;
+pub(crate) use domain_claim::*;
 pub(crate) use ingress_group::*;

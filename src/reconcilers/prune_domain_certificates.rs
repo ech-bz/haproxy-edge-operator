@@ -20,13 +20,11 @@ impl Reconciler for PruneDomainCertificatesReconciler {
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
         let owner = group.owner()?;
         let desired = group
-            .spec
-            .domains
-            .iter()
-            .flatten()
+            .icann_domains()?
+            .into_iter()
             .map(|domain| {
                 DomainCertificateComponent {
-                    domain: ResourceId::new(domain),
+                    domain: ResourceId::new(&domain),
                 }
                 .name(&owner)
             })

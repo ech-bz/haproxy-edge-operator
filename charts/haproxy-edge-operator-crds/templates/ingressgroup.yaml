@@ -35,7 +35,7 @@ spec:
                     type: string
                 domains:
                   type: array
-                  description: Hostnames owned by this group.
+                  description: Domains registered in DomainClaim and bound exclusively to this group.
                   items:
                     type: string
                 routes:

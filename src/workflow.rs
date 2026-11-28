@@ -4,9 +4,10 @@ use crate::{
     error::OperatorError,
     reconcilers::{
         bundle::BundleReconciler, domain_certificate::DomainCertificateReconciler,
-        ip_certificates::IpCertificatesReconciler, issuer::IssuerReconciler,
-        namespaces::NamespacesReconciler,
+        domain_claims::DomainClaimsReconciler, ip_certificates::IpCertificatesReconciler,
+        issuer::IssuerReconciler, namespaces::NamespacesReconciler,
         prune_domain_certificates::PruneDomainCertificatesReconciler,
+        prune_domain_claims::PruneDomainClaimsReconciler,
         prune_ip_certificates::PruneIpCertificatesReconciler,
         prune_namespaces::PruneNamespacesReconciler, readiness::ReadinessReconciler,
         validate::ValidateReconciler, workload::WorkloadReconciler,
@@ -16,6 +17,7 @@ use ech_k8s::{Graph, GraphError, NodeKey, Workflow};
 
 pub(crate) struct EdgeWorkflow {
     pub(crate) operator: OperatorSettings,
+    pub(crate) state_namespace: String,
 }
 
 impl Workflow for EdgeWorkflow {
@@ -27,46 +29,61 @@ impl Workflow for EdgeWorkflow {
         group: &IngressGroup,
     ) -> Result<Graph<Self::Crd, Self::Error>, GraphError> {
         let mut graph = Graph::new();
-        graph.add(PruneNamespacesReconciler, [])?;
+        let prune_claims = PruneDomainClaimsReconciler {
+            state_namespace: self.state_namespace.clone(),
+        };
+        if group.metadata.deletion_timestamp.is_some() {
+            graph.add(prune_claims.clone(), [])?;
+            graph.add(PruneNamespacesReconciler, [prune_claims.into()])?;
+            graph.add(
+                PruneDomainCertificatesReconciler,
+                [PruneNamespacesReconciler.into()],
+            )?;
+            return Ok(graph);
+        }
+        graph.add(ValidateReconciler, [])?;
+        let Ok(certificates_domains) = group.icann_domains() else {
+            return Ok(graph);
+        };
         graph.add(
             PruneDomainCertificatesReconciler,
-            [PruneNamespacesReconciler.into()],
+            [ValidateReconciler.into()],
         )?;
         graph.add(
-            PruneIpCertificatesReconciler,
+            prune_claims.clone(),
             [PruneDomainCertificatesReconciler.into()],
         )?;
-        graph.add(ValidateReconciler, [PruneIpCertificatesReconciler.into()])?;
-        graph.add(NamespacesReconciler, [ValidateReconciler.into()])?;
-        graph.add(IssuerReconciler, [ValidateReconciler.into()])?;
-
+        let claims = DomainClaimsReconciler {
+            state_namespace: self.state_namespace.clone(),
+        };
+        graph.add(claims.clone(), [prune_claims.into()])?;
+        graph.add(NamespacesReconciler, [claims.into()])?;
+        graph.add(PruneNamespacesReconciler, [NamespacesReconciler.into()])?;
+        graph.add(
+            PruneIpCertificatesReconciler,
+            [PruneNamespacesReconciler.into()],
+        )?;
+        graph.add(IssuerReconciler, [PruneIpCertificatesReconciler.into()])?;
         let mut certificates = vec![NodeKey::from(IpCertificatesReconciler)];
-        for domain in group
-            .spec
-            .domains
-            .iter()
-            .flatten()
-            .collect::<std::collections::BTreeSet<_>>()
-        {
-            let certificate = DomainCertificateReconciler {
-                domain: domain.clone(),
-            };
+        for domain in certificates_domains {
+            let certificate = DomainCertificateReconciler { domain };
             graph.add(certificate.clone(), [IssuerReconciler.into()])?;
             certificates.push(certificate.into());
         }
-        graph.add(
-            IpCertificatesReconciler,
-            [IssuerReconciler.into(), NamespacesReconciler.into()],
-        )?;
+        graph.add(IpCertificatesReconciler, [IssuerReconciler.into()])?;
         let bundle = BundleReconciler {
             operator: self.operator.clone(),
         };
+
         graph.add(bundle.clone(), certificates)?;
         let workload = WorkloadReconciler {
             operator: self.operator.clone(),
         };
-        graph.add(workload.clone(), [NamespacesReconciler.into()])?;
-        graph.add(ReadinessReconciler, [workload.into(), bundle.into()])?;
+        graph.add(workload.clone(), [PruneIpCertificatesReconciler.into()])?;
+        graph.add(
+            ReadinessReconciler,
+            [workload.clone().into(), bundle.into()],
+        )?;
         Ok(graph)
     }
 }

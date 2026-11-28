@@ -7,7 +7,7 @@ mod support;
 mod workflow;
 
 use agent::Agent;
-use crds::{Certificate, ClusterIssuer};
+use crds::{Certificate, ClusterIssuer, DomainClaim};
 use ech_k8s::{Operator, OperatorSpec, RuntimeSettings};
 use error::{OperatorError, Result};
 use k8s_openapi::api::{
@@ -19,9 +19,15 @@ use kube::{
     ResourceExt,
     runtime::{reflector::ObjectRef, watcher},
 };
-use std::{collections::HashMap, fs, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    fs,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use support::{
     components::{GROUP, OWNER},
+    domain::DomainName,
     resources::Http01Ingress,
     watches::WatchContext,
 };
@@ -64,6 +70,7 @@ async fn main() -> Result<()> {
                 ));
             }
             let interval = Duration::from_secs(operator.reconcile_interval_seconds.max(1));
+            let state_namespace = leader.lease_namespace.clone();
             Operator::run_with_controller(
                 OperatorSpec {
                     runtime: RuntimeSettings {
@@ -73,7 +80,10 @@ async fn main() -> Result<()> {
                     },
                     leader,
                     field_manager: "haproxy-edge-operator",
-                    workflow: workflow::EdgeWorkflow { operator },
+                    workflow: workflow::EdgeWorkflow {
+                        operator,
+                        state_namespace,
+                    },
                 },
                 move |controller, client| {
                     let nodes = controller.store();
@@ -81,8 +91,11 @@ async fn main() -> Result<()> {
                     let solvers = controller.store();
                     let secrets = WatchContext {
                         groups: controller.store(),
+                        claims: Arc::new(Mutex::new(HashMap::<String, DomainClaim>::new())),
                     };
                     let config_maps = secrets.clone();
+                    let claims = controller.store();
+                    let registry = secrets.claims.clone();
                     let previous = Mutex::new(HashMap::<String, String>::new());
                     let owned = watcher::Config::default().labels(OWNER);
                     controller
@@ -141,6 +154,29 @@ async fn main() -> Result<()> {
                             client.all::<ConfigMap>().into_inner(),
                             watcher::Config::default(),
                             move |config_map: ConfigMap| config_maps.referenced(config_map),
+                        )
+                        .watches(
+                            client.all::<DomainClaim>().into_inner(),
+                            watcher::Config::default(),
+                            move |claim: DomainClaim| {
+                                let domain = DomainName::new(&claim.spec.domain).ok();
+                                registry
+                                    .lock()
+                                    .unwrap()
+                                    .insert(claim.name_any(), claim.clone());
+                                claims
+                                    .state()
+                                    .into_iter()
+                                    .filter(|group| {
+                                        domain.as_ref().is_some_and(|domain| {
+                                            group
+                                                .domains()
+                                                .is_ok_and(|names| names.contains(&domain.0))
+                                        }) || claim.held_by(group)
+                                    })
+                                    .map(|group| ObjectRef::from_obj(&*group))
+                                    .collect::<Vec<_>>()
+                            },
                         )
                         .watches(
                             client.all::<Certificate>().into_inner(),

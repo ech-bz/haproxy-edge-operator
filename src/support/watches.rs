@@ -1,7 +1,8 @@
 use crate::{
-    crds::IngressGroup,
+    crds::{DomainClaim, IngressGroup},
     support::{
         components::{GROUP, GROUP_NS},
+        domain::DomainName,
         haproxy::{HeaderPart, HeaderTemplate},
     },
 };
@@ -9,11 +10,15 @@ use kube::{
     ResourceExt,
     runtime::reflector::{ObjectRef, Store},
 };
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone)]
 pub(crate) struct WatchContext {
     pub(crate) groups: Store<IngressGroup>,
+    pub(crate) claims: Arc<Mutex<HashMap<String, DomainClaim>>>,
 }
 
 impl WatchContext {
@@ -23,29 +28,30 @@ impl WatchContext {
     ) -> Vec<ObjectRef<IngressGroup>> {
         let namespace = resource.namespace();
         let name = resource.name_any();
-        let mut roots: HashSet<_> = self
-            .groups
-            .state()
-            .into_iter()
-            .filter(|group| {
-                group.namespace() == namespace
-                    && group
-                        .spec
-                        .routes
-                        .iter()
-                        .flatten()
-                        .flat_map(|route| route.headers.iter().flat_map(|headers| headers.values()))
-                        .any(|value| {
-                            HeaderTemplate::new(value).is_ok_and(|template| {
-                                template.parts.iter().any(|part| {
-                                matches!(part, HeaderPart::Source { kind, name: source_name, .. }
-                                    if *kind == T::KIND && *source_name == name)
-                            })
-                            })
-                        })
-            })
-            .map(|group| ObjectRef::from_obj(&*group))
-            .collect();
+        let affected: HashSet<_> = if T::KIND == "Secret" {
+            self.claims
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|claim| {
+                    Some(&claim.spec.credentials_secret_ref.namespace) == namespace.as_ref()
+                        && claim.spec.credentials_secret_ref.name == name
+                })
+                .filter_map(|claim| DomainName::new(&claim.spec.domain).ok().map(|name| name.0))
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        let mut roots: HashSet<_> = self.groups.state().into_iter().filter(|group| {
+        group.domains().is_ok_and(|names| names.iter().any(|domain| affected.contains(domain)))
+            || (group.namespace() == namespace && group.spec.routes.iter().flatten()
+                .flat_map(|route| route.headers.iter().flat_map(|headers| headers.values()))
+                .any(|value| HeaderTemplate::new(value).is_ok_and(|template| template.parts.iter().any(|part| {
+                    matches!(part, HeaderPart::Source { kind, name: source_name, .. } if *kind == T::KIND && *source_name == name)
+                }))))
+    })
+        .map(|group| ObjectRef::from_obj(&*group))
+        .collect();
         roots.extend(Self::managed(resource));
         roots.into_iter().collect()
     }

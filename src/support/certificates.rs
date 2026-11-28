@@ -68,25 +68,17 @@ impl<'a> Certificates<'a> {
             domain: None,
         }];
         let namespace = self.group.cr_ns()?;
-        files.extend(
-            self.group
-                .spec
-                .domains
-                .iter()
-                .flatten()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .map(|domain| CertificateFile {
-                    namespace: namespace.clone(),
-                    name: DomainCertificateComponent {
-                        domain: ResourceId::new(&domain),
-                    }
-                    .name(&owner),
-                    file: format!("domain-{}.pem", ResourceId::new(&domain)),
-                    domain: Some(domain),
-                }),
-        );
+        files.extend(self.group.icann_domains()?.into_iter().map(|domain| {
+            CertificateFile {
+                namespace: namespace.clone(),
+                name: DomainCertificateComponent {
+                    domain: ResourceId::new(&domain),
+                }
+                .name(&owner),
+                file: format!("domain-{}.pem", ResourceId::new(&domain)),
+                domain: Some(domain),
+            }
+        }));
         Ok(files)
     }
 
