@@ -44,7 +44,7 @@ impl WatchContext {
         };
         let mut roots: HashSet<_> = self.groups.state().into_iter().filter(|group| {
         group.domains().is_ok_and(|names| names.iter().any(|domain| affected.contains(domain)))
-            || (group.namespace() == namespace && group.spec.routes.iter().flatten()
+            || (group.namespace() == namespace && group.spec.hosts.iter().flat_map(|host| host.routes.iter().flatten())
                 .flat_map(|route| route.headers.iter().flat_map(|headers| headers.values()))
                 .any(|value| HeaderTemplate::new(value).is_ok_and(|template| template.parts.iter().any(|part| {
                     matches!(part, HeaderPart::Source { kind, name: source_name, .. } if *kind == T::KIND && *source_name == name)

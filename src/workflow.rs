@@ -100,24 +100,16 @@ impl Workflow for EdgeWorkflow {
             ReadinessReconciler,
             [workload.clone().into(), bundle.into()],
         )?;
-        if group
-            .spec
-            .domains
-            .as_ref()
-            .is_some_and(|domains| !domains.is_empty())
-            || group.spec.ech.is_some()
-        {
-            let addresses = AddressDnsReconciler {
-                state_namespace: self.state_namespace.clone(),
-            };
-            graph.add(addresses.clone(), [workload.into()])?;
-            graph.add(AppliedReadinessReconciler, [ReadinessReconciler.into()])?;
-            graph.add(
-                DnsReconciler,
-                [AppliedReadinessReconciler.into(), addresses.into()],
-            )?;
-            graph.add(DomainStatusReconciler, [DnsReconciler.into()])?;
-        }
+        let addresses = AddressDnsReconciler {
+            state_namespace: self.state_namespace.clone(),
+        };
+        graph.add(addresses.clone(), [workload.into()])?;
+        graph.add(AppliedReadinessReconciler, [ReadinessReconciler.into()])?;
+        graph.add(
+            DnsReconciler,
+            [AppliedReadinessReconciler.into(), addresses.into()],
+        )?;
+        graph.add(DomainStatusReconciler, [DnsReconciler.into()])?;
         Ok(graph)
     }
 }

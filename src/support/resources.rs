@@ -152,10 +152,9 @@ impl IngressGroup {
 
     pub(crate) fn domains(&self) -> Result<BTreeSet<String>> {
         self.spec
-            .domains
+            .hosts
             .iter()
-            .flatten()
-            .map(String::as_str)
+            .flat_map(|host| host.domains.iter().map(String::as_str))
             .chain(self.spec.ech.as_deref())
             .map(|domain| DomainName::new(domain).map(|name| name.0))
             .collect()

@@ -25,11 +25,22 @@ impl Reconciler for ValidateReconciler {
                 "group name exceeds the node label limit".into(),
             ));
         }
+        let hosts = group.spec.hosts.as_slice();
+        if hosts.is_empty() {
+            return Err(OperatorError::Config(
+                "at least one host block is required".into(),
+            ));
+        }
         let mut seen_domains = BTreeSet::new();
-        for value in group.spec.domains.iter().flatten() {
-            let domain = DomainName::new(value)?.0;
-            if !seen_domains.insert(domain.clone()) {
-                return Err(OperatorError::Config(format!("duplicate domain {domain}")));
+        for host in hosts {
+            if host.domains.is_empty() {
+                return Err(OperatorError::Config("host block requires domains".into()));
+            }
+            for value in &host.domains {
+                let domain = DomainName::new(value)?.0;
+                if !seen_domains.insert(domain.clone()) {
+                    return Err(OperatorError::Config(format!("duplicate domain {domain}")));
+                }
             }
         }
         if let Some(cover) = group.ech_cover()? {
@@ -61,35 +72,37 @@ impl Reconciler for ValidateReconciler {
                 )));
             }
         }
-        let mut paths = BTreeSet::new();
-        for route in group.spec.routes.as_deref().unwrap_or_default() {
-            if !route.path_prefix.starts_with('/')
-                || route.path_prefix.len() > 2048
-                || route
-                    .path_prefix
-                    .chars()
-                    .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#')
-                || !paths.insert(&route.path_prefix)
-            {
-                return Err(OperatorError::Config(format!(
-                    "invalid or duplicate pathPrefix {}",
-                    route.path_prefix
-                )));
-            }
-            BackendUrl::new(&route.url)?;
-            let mut headers = BTreeSet::new();
-            for (name, value) in route.headers.iter().flatten() {
-                if name.is_empty()
-                    || !name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
-                    || !headers.insert(name.to_ascii_lowercase())
+        for host in hosts {
+            let mut paths = BTreeSet::new();
+            for route in host.routes.iter().flatten() {
+                if !route.path_prefix.starts_with('/')
+                    || route.path_prefix.len() > 2048
+                    || route
+                        .path_prefix
+                        .chars()
+                        .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#')
+                    || !paths.insert(&route.path_prefix)
                 {
                     return Err(OperatorError::Config(format!(
-                        "invalid or duplicate request header {name}"
+                        "invalid or duplicate pathPrefix {}",
+                        route.path_prefix
                     )));
                 }
-                HeaderTemplate::new(value)?;
+                BackendUrl::new(&route.url)?;
+                let mut headers = BTreeSet::new();
+                for (name, value) in route.headers.iter().flatten() {
+                    if name.is_empty()
+                        || !name
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+                        || !headers.insert(name.to_ascii_lowercase())
+                    {
+                        return Err(OperatorError::Config(format!(
+                            "invalid or duplicate request header {name}"
+                        )));
+                    }
+                    HeaderTemplate::new(value)?;
+                }
             }
         }
         if group

@@ -50,6 +50,60 @@ impl Reconciler for BundleReconciler {
             .as_ref()
             .map(|_| group.owner().map(|owner| EchComponent.name(owner)))
             .transpose()?;
+        let mut host_acls = String::new();
+        let mut has_exact = false;
+        let mut conditions = Vec::new();
+        let mut routes = Vec::new();
+        for (index, host) in group.spec.hosts.iter().enumerate() {
+            let mut exact = Vec::new();
+            let mut wildcard = Vec::new();
+            for domain in &host.domains {
+                let domain = DomainName::new(domain)?.0;
+                if let Some(suffix) = domain.strip_prefix("*.") {
+                    wildcard.push(quote(&format!("^[^.]+\\.{}\\.?$", regex::escape(suffix))));
+                } else {
+                    exact.push(quote(&domain));
+                    exact.push(quote(&format!("{domain}.")));
+                }
+            }
+            let mut alternatives = Vec::new();
+            if !exact.is_empty() {
+                has_exact = true;
+                let names = exact.join(" ");
+                writeln!(
+                    host_acls,
+                    "  acl host_{index}_exact req.hdr(host),field(1,:) -i -- {names}"
+                )
+                .unwrap();
+                writeln!(
+                    host_acls,
+                    "  acl exact_host req.hdr(host),field(1,:) -i -- {names}"
+                )
+                .unwrap();
+                alternatives.push(format!("host_{index}_exact"));
+            }
+            if !wildcard.is_empty() {
+                writeln!(
+                    host_acls,
+                    "  acl host_{index}_wildcard req.hdr(host),field(1,:) -m reg -i -- {}",
+                    wildcard.join(" ")
+                )
+                .unwrap();
+                alternatives.push(format!("host_{index}_wildcard !exact_host"));
+            }
+            conditions.push(alternatives);
+            let mut selected: Vec<_> = host.routes.iter().flatten().collect();
+            selected.sort_by(|a, b| {
+                b.path_prefix
+                    .len()
+                    .cmp(&a.path_prefix.len())
+                    .then(a.path_prefix.cmp(&b.path_prefix))
+            });
+            routes.extend(selected.into_iter().map(|route| (index, route)));
+        }
+        if !has_exact && !host_acls.is_empty() {
+            host_acls.push_str("  acl exact_host always_false\n");
+        }
         let nodes = group.edge_nodes(client).await?;
         let mut solvers = client
             .all::<Ingress>()
@@ -273,23 +327,22 @@ frontend http
                 config.push_str(r#"  http-request set-header X-Forwarded-For "%[req.hdr(X-Forwarded-For)], %[src]" if { req.hdr(X-Forwarded-For) -m found }
   http-request set-header X-Forwarded-For %[src] unless { req.hdr(X-Forwarded-For) -m found }
 "#);
-                let mut routes: Vec<_> = group.spec.routes.iter().flatten().collect();
-                routes.sort_by(|a, b| {
-                    b.path_prefix
-                        .len()
-                        .cmp(&a.path_prefix.len())
-                        .then(a.path_prefix.cmp(&b.path_prefix))
-                });
-                for (index, route) in routes.iter().enumerate() {
-                    writeln!(
-                        config,
-                        "  use_backend route_{index} if {{ path_beg -- {} }}",
-                        quote(&route.path_prefix)
-                    )
-                    .unwrap();
+                config.push_str(&host_acls);
+                for (index, (host, route)) in routes.iter().enumerate() {
+                    let condition = conditions[*host]
+                        .iter()
+                        .map(|condition| {
+                            format!(
+                                "{condition} {{ path_beg -- {} }}",
+                                quote(&route.path_prefix)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    writeln!(config, "  use_backend route_{index} if {condition}").unwrap();
                 }
                 config.push_str("  default_backend unmatched\n");
-                for (index, route) in routes.iter().enumerate() {
+                for (index, (_, route)) in routes.iter().enumerate() {
                     let BackendUrl(url) = BackendUrl::new(&route.url)?;
                     let scheme = url.scheme_str().unwrap();
                     let host = url.host().unwrap();
