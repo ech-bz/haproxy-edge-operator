@@ -89,6 +89,20 @@ pub(crate) struct UnsSignerComponent;
 
 #[derive(Clone, Copy, Serialize, Component)]
 #[component(name = "ech")]
-pub(crate) struct EchComponent;
+pub(crate) struct EchComponent {
+    pub(crate) cover: ResourceId,
+}
+
+impl EchComponent {
+    pub(crate) fn new(cover: &str) -> Self {
+        Self {
+            cover: ResourceId::new(cover),
+        }
+    }
+
+    pub(crate) fn file(&self) -> String {
+        format!("{}.ech", self.name("key"))
+    }
+}
 
 pub(crate) const DOMAIN_BINDING: &str = "haproxy.ech.bz/domain-binding";

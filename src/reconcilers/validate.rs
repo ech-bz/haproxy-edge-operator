@@ -25,37 +25,37 @@ impl Reconciler for ValidateReconciler {
                 "group name exceeds the node label limit".into(),
             ));
         }
+        let mut seen_domains = BTreeSet::new();
+        let covers = group.ech_covers()?;
         let hosts = group.spec.hosts.as_slice();
         if hosts.is_empty() {
             return Err(OperatorError::Config(
                 "at least one host block is required".into(),
             ));
         }
-        let mut seen_domains = BTreeSet::new();
         for host in hosts {
             if host.domains.is_empty() {
                 return Err(OperatorError::Config("host block requires domains".into()));
             }
+            let mut protected = false;
             for value in &host.domains {
                 let domain = DomainName::new(value)?.0;
+                protected |= !DomainName::is_uns(&domain) && !covers.contains(&domain);
                 if !seen_domains.insert(domain.clone()) {
                     return Err(OperatorError::Config(format!("duplicate domain {domain}")));
                 }
             }
-        }
-        if let Some(cover) = group.ech_cover()? {
-            if DomainName::is_uns(&cover) || cover.starts_with("*.") {
-                return Err(OperatorError::Config(
-                    "ECH cover must be a concrete ICANN domain".into(),
-                ));
-            }
-            if !seen_domains
-                .iter()
-                .any(|domain| !DomainName::is_uns(domain) && domain != &cover)
-            {
-                return Err(OperatorError::Config(
-                    "ECH requires a protected ICANN domain".into(),
-                ));
+            if let Some(cover) = host.ech_cover()? {
+                if DomainName::is_uns(&cover) || cover.starts_with("*.") {
+                    return Err(OperatorError::Config(
+                        "ECH cover must be a concrete ICANN domain".into(),
+                    ));
+                }
+                if !protected {
+                    return Err(OperatorError::Config(
+                        "ECH requires a protected ICANN domain in the same host block".into(),
+                    ));
+                }
             }
         }
         for trusted in group

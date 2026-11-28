@@ -1,5 +1,5 @@
 use crate::{
-    crds::{DomainClaim, IngressGroup},
+    crds::{DomainClaim, IngressGroup, IngressGroupHosts},
     error::{OperatorError, Result},
 };
 
@@ -98,13 +98,38 @@ impl DomainClaim {
     }
 }
 
-impl IngressGroup {
+impl IngressGroupHosts {
     pub(crate) fn ech_cover(&self) -> Result<Option<String>> {
-        self.spec
-            .ech
+        self.ech
             .as_deref()
             .map(DomainName::new)
             .transpose()
             .map(|cover| cover.map(|name| name.0))
+    }
+}
+
+impl IngressGroup {
+    pub(crate) fn ech_covers(&self) -> Result<std::collections::BTreeSet<String>> {
+        self.spec
+            .hosts
+            .iter()
+            .filter_map(|host| host.ech_cover().transpose())
+            .collect()
+    }
+
+    pub(crate) fn ech_domains(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let covers = self.ech_covers()?;
+        let mut domains = std::collections::BTreeMap::new();
+        for host in &self.spec.hosts {
+            if let Some(cover) = host.ech_cover()? {
+                for domain in &host.domains {
+                    let domain = DomainName::new(domain)?.0;
+                    if !DomainName::is_uns(&domain) && !covers.contains(&domain) {
+                        domains.insert(domain, cover.clone());
+                    }
+                }
+            }
+        }
+        Ok(domains)
     }
 }

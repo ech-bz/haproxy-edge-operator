@@ -4,6 +4,7 @@ use crate::{
     support::{
         components::{DnsComponent, EchComponent},
         dns::{DnsState, DnsTarget},
+        haproxy::EchConfig,
     },
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, Reconciler};
@@ -53,20 +54,26 @@ impl PruneDnsReconciler {
                 .filter_map(|node| node.ip().ok().map(|ip| ip.to_string()))
                 .collect()
         };
-        let cover = group.ech_cover()?;
-        let current_cover = client
-            .namespaced::<k8s_openapi::api::core::v1::Secret>(&group.cr_ns()?)
-            .api()
-            .get_opt(&EchComponent.name(group.owner()?))
-            .await?
-            .and_then(|secret| secret.data)
-            .and_then(|mut data| data.remove("public-name"))
-            .and_then(|value| String::from_utf8(value.0).ok());
-        let keep_ech = cover.is_some()
-            && cover == current_cover
-            && desired
-                .iter()
-                .any(|target| Some(&target.domain) == cover.as_ref());
+        let domains = group.ech_domains()?;
+        let secrets = client.namespaced::<k8s_openapi::api::core::v1::Secret>(&group.cr_ns()?);
+        let mut configs = std::collections::BTreeMap::new();
+        for cover in group.ech_covers()? {
+            let component = EchComponent::new(&cover);
+            if desired.iter().any(|target| target.domain == cover)
+                && let Some(secret) = secrets
+                    .api()
+                    .get_opt(&component.name(group.owner()?))
+                    .await?
+                && let Some(data) = secret.data
+                && data
+                    .get("public-name")
+                    .is_some_and(|value| value.0 == cover.as_bytes())
+                && let Some(pem) = data.get("current.ech")
+                && let Ok(config) = EchConfig::new(&pem.0)
+            {
+                configs.insert(cover, config.0);
+            }
+        }
         for state in &mut states {
             let target = desired
                 .iter()
@@ -91,7 +98,12 @@ impl PruneDnsReconciler {
                     Some("A" | "AAAA") => record["values"]
                         .as_array()
                         .is_some_and(|values| !values.is_empty()),
-                    Some("HTTPS") => keep_ech && Some(&state.target.domain) != cover.as_ref(),
+                    Some("HTTPS") => domains
+                        .get(&state.target.domain)
+                        .and_then(|cover| configs.get(cover))
+                        .is_some_and(|config| {
+                            record["value"]["svcparams"]["ech"].as_str() == Some(config.as_str())
+                        }),
                     _ => true,
                 });
                 entries

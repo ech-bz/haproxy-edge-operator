@@ -11,7 +11,9 @@ use std::{collections::BTreeMap, time::Duration};
 use tokio::{process::Command, time::timeout};
 
 #[derive(Clone, Serialize)]
-pub(crate) struct EchReconciler;
+pub(crate) struct EchReconciler {
+    pub(crate) cover: String,
+}
 
 #[async_trait::async_trait]
 impl Reconciler for EchReconciler {
@@ -19,11 +21,10 @@ impl Reconciler for EchReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        let Some(cover) = group.ech_cover()? else {
-            return Ok(NodeState::Ready);
-        };
+        let cover = &self.cover;
+        let component = EchComponent::new(cover);
         let secrets = client.namespaced::<Secret>(&group.cr_ns()?);
-        let name = EchComponent.name(group.owner()?);
+        let name = component.name(group.owner()?);
         let current = secrets.api().get_opt(&name).await?;
         if current
             .as_ref()
@@ -39,7 +40,7 @@ impl Reconciler for EchReconciler {
         let output = timeout(
             Duration::from_secs(30),
             Command::new("openssl")
-                .args(["ech", "-public_name", &cover, "-out", "/dev/stdout"])
+                .args(["ech", "-public_name", cover, "-out", "/dev/stdout"])
                 .kill_on_drop(true)
                 .output(),
         )
@@ -49,9 +50,9 @@ impl Reconciler for EchReconciler {
             return Err(OperatorError::Config("ECH key generation failed".into()));
         }
         let mut secret = Secret {
-            metadata: group.metadata(&group.cr_ns()?, EchComponent)?,
+            metadata: group.metadata(&group.cr_ns()?, component)?,
             data: Some(BTreeMap::from([
-                ("public-name".into(), ByteString(cover.into_bytes())),
+                ("public-name".into(), ByteString(cover.as_bytes().to_vec())),
                 ("current.ech".into(), ByteString(output.stdout)),
             ])),
             ..Default::default()

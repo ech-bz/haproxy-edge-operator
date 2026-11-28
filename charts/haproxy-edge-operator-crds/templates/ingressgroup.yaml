@@ -29,10 +29,6 @@ spec:
               type: object
               required: [hosts]
               properties:
-                ech:
-                  type: string
-                  minLength: 1
-                  description: ICANN cover domain registered in DomainClaim. The operator manages ECH keys, addresses and the cover certificate automatically.
                 forwardedTrustedIps:
                   type: array
                   description: Peers allowed to supply X-Forwarded-For for this group's entrypoints.
@@ -41,7 +37,7 @@ spec:
                 hosts:
                   type: array
                   minItems: 1
-                  description: Domain sets and their routing configuration.
+                  description: Domain sets and their routing and ECH configuration.
                   items:
                     type: object
                     required: [domains]
@@ -52,6 +48,10 @@ spec:
                         items:
                           type: string
                         description: Domains registered in DomainClaim. Each normalized domain must occur only once across all hosts.
+                      ech:
+                        type: string
+                        minLength: 1
+                        description: ICANN cover domain registered in DomainClaim. The operator manages ECH keys, addresses and the cover certificate automatically.
                       routes:
                         type: array
                         items:

@@ -154,8 +154,12 @@ impl IngressGroup {
         self.spec
             .hosts
             .iter()
-            .flat_map(|host| host.domains.iter().map(String::as_str))
-            .chain(self.spec.ech.as_deref())
+            .flat_map(|host| {
+                host.domains
+                    .iter()
+                    .map(String::as_str)
+                    .chain(host.ech.as_deref())
+            })
             .map(|domain| DomainName::new(domain).map(|name| name.0))
             .collect()
     }

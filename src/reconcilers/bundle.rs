@@ -44,12 +44,7 @@ impl Reconciler for BundleReconciler {
         let literal = |value: &str| quote(&value.replace('%', "%%"));
         let mut sources = BTreeMap::new();
         let mut ech_keys = None;
-        let ech_name = group
-            .spec
-            .ech
-            .as_ref()
-            .map(|_| group.owner().map(|owner| EchComponent.name(owner)))
-            .transpose()?;
+        let covers = group.ech_covers()?;
         let mut host_acls = String::new();
         let mut has_exact = false;
         let mut conditions = Vec::new();
@@ -164,7 +159,7 @@ impl Reconciler for BundleReconciler {
                 std::net::IpAddr::V4(ip) => ip.to_string(),
                 std::net::IpAddr::V6(ip) => format!("[{ip}]"),
             };
-            let experimental = if ech_name.is_some() {
+            let experimental = if !covers.is_empty() {
                 "  expose-experimental-directives\n"
             } else {
                 ""
@@ -258,25 +253,27 @@ frontend http
             config.push_str(&backends);
             config.push_str("\nbackend unmatched\n  http-request deny deny_status 404\n");
             if !list.is_empty() {
-                let ech = if let Some(name) = &ech_name {
+                let ech = if !covers.is_empty() {
                     if ech_keys.is_none() {
                         let namespace = group.cr_ns()?;
-                        let secret = client
-                            .namespaced::<Secret>(&namespace)
-                            .api()
-                            .get(name)
-                            .await?;
-                        let keys: BTreeMap<_, _> = secret
-                            .data
-                            .into_iter()
-                            .flatten()
-                            .filter(|(key, _)| key.ends_with(".ech"))
-                            .map(|(key, value)| (format!("ech-{key}"), value))
-                            .collect();
-                        if keys.is_empty() {
-                            return Err(OperatorError::Config(format!(
-                                "Secret {namespace}/{name} has no .ech keys"
-                            )));
+                        let mut keys = BTreeMap::new();
+                        for cover in &covers {
+                            let component = EchComponent::new(cover);
+                            let name = component.name(group.owner()?);
+                            let secret = client
+                                .namespaced::<Secret>(&namespace)
+                                .api()
+                                .get(&name)
+                                .await?;
+                            let key = secret
+                                .data
+                                .and_then(|mut data| data.remove("current.ech"))
+                                .ok_or_else(|| {
+                                    OperatorError::Config(format!(
+                                        "Secret {namespace}/{name} has no current.ech key"
+                                    ))
+                                })?;
+                            keys.insert(component.file(), key);
                         }
                         ech_keys = Some(keys);
                     }

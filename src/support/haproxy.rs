@@ -102,3 +102,23 @@ impl BackendUrl {
         Ok(Self(url))
     }
 }
+
+pub(crate) struct EchConfig(pub(crate) String);
+
+impl EchConfig {
+    pub(crate) fn new(pem: &[u8]) -> Result<Self, OperatorError> {
+        let text = std::str::from_utf8(pem)
+            .map_err(|_| OperatorError::Config("invalid ECH PEM".into()))?;
+        let config = text
+            .split_once("-----BEGIN ECHCONFIG-----")
+            .and_then(|(_, value)| value.split_once("-----END ECHCONFIG-----"))
+            .ok_or_else(|| OperatorError::Config("missing ECHCONFIG block".into()))?
+            .0
+            .split_whitespace()
+            .collect::<String>();
+        if config.is_empty() {
+            return Err(OperatorError::Config("empty ECHCONFIG block".into()));
+        }
+        Ok(Self(config))
+    }
+}

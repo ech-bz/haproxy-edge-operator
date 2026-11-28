@@ -87,9 +87,13 @@ impl Workflow for EdgeWorkflow {
         let bundle = BundleReconciler {
             operator: self.operator.clone(),
         };
-        if group.spec.ech.is_some() {
-            graph.add(EchReconciler, [IssuerReconciler.into()])?;
-            certificates.push(EchReconciler.into());
+        let Ok(covers) = group.ech_covers() else {
+            return Ok(graph);
+        };
+        for cover in covers {
+            let ech = EchReconciler { cover };
+            graph.add(ech.clone(), [IssuerReconciler.into()])?;
+            certificates.push(ech.into());
         }
         graph.add(bundle.clone(), certificates)?;
         let workload = WorkloadReconciler {
