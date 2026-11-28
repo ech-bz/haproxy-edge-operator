@@ -79,4 +79,8 @@ pub(crate) struct DomainClaimComponent {
     pub(crate) domain: ResourceId,
 }
 
+#[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "ech")]
+pub(crate) struct EchComponent;
+
 pub(crate) const DOMAIN_BINDING: &str = "haproxy.ech.bz/domain-binding";

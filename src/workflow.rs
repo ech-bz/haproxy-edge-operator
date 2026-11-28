@@ -4,10 +4,11 @@ use crate::{
     error::OperatorError,
     reconcilers::{
         bundle::BundleReconciler, domain_certificate::DomainCertificateReconciler,
-        domain_claims::DomainClaimsReconciler, ip_certificates::IpCertificatesReconciler,
-        issuer::IssuerReconciler, namespaces::NamespacesReconciler,
+        domain_claims::DomainClaimsReconciler, ech::EchReconciler,
+        ip_certificates::IpCertificatesReconciler, issuer::IssuerReconciler,
+        namespaces::NamespacesReconciler,
         prune_domain_certificates::PruneDomainCertificatesReconciler,
-        prune_domain_claims::PruneDomainClaimsReconciler,
+        prune_domain_claims::PruneDomainClaimsReconciler, prune_ech::PruneEchReconciler,
         prune_ip_certificates::PruneIpCertificatesReconciler,
         prune_namespaces::PruneNamespacesReconciler, readiness::ReadinessReconciler,
         validate::ValidateReconciler, workload::WorkloadReconciler,
@@ -39,15 +40,20 @@ impl Workflow for EdgeWorkflow {
                 PruneDomainCertificatesReconciler,
                 [PruneNamespacesReconciler.into()],
             )?;
+            graph.add(
+                PruneEchReconciler,
+                [PruneDomainCertificatesReconciler.into()],
+            )?;
             return Ok(graph);
         }
         graph.add(ValidateReconciler, [])?;
         let Ok(certificates_domains) = group.icann_domains() else {
             return Ok(graph);
         };
+        graph.add(PruneEchReconciler, [ValidateReconciler.into()])?;
         graph.add(
             PruneDomainCertificatesReconciler,
-            [ValidateReconciler.into()],
+            [PruneEchReconciler.into()],
         )?;
         graph.add(
             prune_claims.clone(),
@@ -74,7 +80,10 @@ impl Workflow for EdgeWorkflow {
         let bundle = BundleReconciler {
             operator: self.operator.clone(),
         };
-
+        if group.spec.ech.is_some() {
+            graph.add(EchReconciler, [IssuerReconciler.into()])?;
+            certificates.push(EchReconciler.into());
+        }
         graph.add(bundle.clone(), certificates)?;
         let workload = WorkloadReconciler {
             operator: self.operator.clone(),

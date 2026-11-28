@@ -28,6 +28,10 @@ spec:
             spec:
               type: object
               properties:
+                ech:
+                  type: string
+                  minLength: 1
+                  description: ICANN cover domain registered in DomainClaim. The operator manages ECH keys, addresses and the cover certificate automatically.
                 forwardedTrustedIps:
                   type: array
                   description: Peers allowed to supply X-Forwarded-For for this group's entrypoints.

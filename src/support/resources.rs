@@ -156,6 +156,7 @@ impl IngressGroup {
             .iter()
             .flatten()
             .map(String::as_str)
+            .chain(self.spec.ech.as_deref())
             .map(|domain| DomainName::new(domain).map(|name| name.0))
             .collect()
     }

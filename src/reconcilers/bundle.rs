@@ -43,6 +43,13 @@ impl Reconciler for BundleReconciler {
         };
         let literal = |value: &str| quote(&value.replace('%', "%%"));
         let mut sources = BTreeMap::new();
+        let mut ech_keys = None;
+        let ech_name = group
+            .spec
+            .ech
+            .as_ref()
+            .map(|_| group.owner().map(|owner| EchComponent.name(owner)))
+            .transpose()?;
         let nodes = group.edge_nodes(client).await?;
         let mut solvers = client
             .all::<Ingress>()
@@ -103,9 +110,14 @@ impl Reconciler for BundleReconciler {
                 std::net::IpAddr::V4(ip) => ip.to_string(),
                 std::net::IpAddr::V6(ip) => format!("[{ip}]"),
             };
+            let experimental = if ech_name.is_some() {
+                "  expose-experimental-directives\n"
+            } else {
+                ""
+            };
             let mut config = format!(
                 r"global
-  user root
+{experimental}  user root
   log stdout format raw local0
   maxconn 10000
 
@@ -192,8 +204,35 @@ frontend http
             config.push_str(&backends);
             config.push_str("\nbackend unmatched\n  http-request deny deny_status 404\n");
             if !list.is_empty() {
+                let ech = if let Some(name) = &ech_name {
+                    if ech_keys.is_none() {
+                        let namespace = group.cr_ns()?;
+                        let secret = client
+                            .namespaced::<Secret>(&namespace)
+                            .api()
+                            .get(name)
+                            .await?;
+                        let keys: BTreeMap<_, _> = secret
+                            .data
+                            .into_iter()
+                            .flatten()
+                            .filter(|(key, _)| key.ends_with(".ech"))
+                            .map(|(key, value)| (format!("ech-{key}"), value))
+                            .collect();
+                        if keys.is_empty() {
+                            return Err(OperatorError::Config(format!(
+                                "Secret {namespace}/{name} has no .ech keys"
+                            )));
+                        }
+                        ech_keys = Some(keys);
+                    }
+                    data.extend(ech_keys.as_ref().unwrap().clone());
+                    " ech @BUNDLE@"
+                } else {
+                    ""
+                };
                 writeln!(config,
-                    "\nfrontend https\n  bind {ip}:443 ssl crt-list @BUNDLE@/crt-list alpn h2,http/1.1",
+                    "\nfrontend https\n  bind {ip}:443 ssl crt-list @BUNDLE@/crt-list alpn h2,http/1.1{ech}",
                 ).unwrap();
                 let trusted = group
                     .spec

@@ -42,3 +42,14 @@ impl DomainClaim {
             .is_some_and(|holder| Some(&holder.uid) == group.metadata.uid.as_ref())
     }
 }
+
+impl IngressGroup {
+    pub(crate) fn ech_cover(&self) -> Result<Option<String>> {
+        self.spec
+            .ech
+            .as_deref()
+            .map(DomainName::new)
+            .transpose()
+            .map(|cover| cover.map(|name| name.0))
+    }
+}

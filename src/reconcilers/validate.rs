@@ -32,7 +32,18 @@ impl Reconciler for ValidateReconciler {
                 return Err(OperatorError::Config(format!("duplicate domain {domain}")));
             }
         }
-
+        if let Some(cover) = group.ech_cover()? {
+            if cover.starts_with("*.") {
+                return Err(OperatorError::Config(
+                    "ECH cover must be a concrete ICANN domain".into(),
+                ));
+            }
+            if !seen_domains.iter().any(|domain| domain != &cover) {
+                return Err(OperatorError::Config(
+                    "ECH requires a protected ICANN domain".into(),
+                ));
+            }
+        }
         for trusted in group
             .spec
             .forwarded_trusted_ips
