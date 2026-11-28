@@ -1,5 +1,7 @@
+pub(crate) mod applied;
 pub(crate) mod certificates;
 pub(crate) mod components;
+pub(crate) mod dns;
 pub(crate) mod domain;
 pub(crate) mod haproxy;
 pub(crate) mod resources;

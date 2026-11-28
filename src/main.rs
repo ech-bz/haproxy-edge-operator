@@ -57,7 +57,9 @@ async fn main() -> Result<()> {
                     "HAProxy bundle has not been applied".into(),
                 ));
             }
-            agent.running().await
+            agent.running().await?;
+            println!("{applied}");
+            Ok(())
         }
         "operator" => {
             let operator: config::OperatorSettings = envy::prefixed("OPERATOR_").from_env()?;
@@ -154,6 +156,11 @@ async fn main() -> Result<()> {
                             client.all::<ConfigMap>().into_inner(),
                             watcher::Config::default(),
                             move |config_map: ConfigMap| config_maps.referenced(config_map),
+                        )
+                        .watches(
+                            client.all::<k8s_openapi::api::core::v1::Pod>().into_inner(),
+                            owned.clone(),
+                            WatchContext::managed,
                         )
                         .watches(
                             client.all::<DomainClaim>().into_inner(),

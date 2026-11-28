@@ -16,10 +16,18 @@ spec:
         app.kubernetes.io/name: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}
+      securityContext:
+        fsGroup: 65532
+      volumes:
+        - name: temporary
+          emptyDir: { medium: Memory, sizeLimit: 32Mi }
       containers:
         - name: operator
           image: "{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
           env:
             - name: OPERATOR_LEADER_LEASE_NAMESPACE
               value: {{ .Release.Namespace | quote }}

@@ -2,6 +2,17 @@ ARG HAPROXY_IMAGE=haproxy:3.4@sha256:3e4e390ccc7208326607be371f4d14f6296af5cdb41
 ARG HAPROXY_SOURCE_VERSION=3.4.9
 ARG HAPROXY_SOURCE_SHA256=896c55b6029ec2a841617e92a327a335f36a8968e7d51a47eada159673c2f320
 
+FROM ${HAPROXY_IMAGE} AS octodns-build
+USER root
+RUN apt-get install --update -y --no-install-recommends python3-venv patch
+COPY octodns/requirements.txt /tmp/octodns-requirements.txt
+COPY patches/octodns-ech-validation.patch /tmp/octodns-ech-validation.patch
+ARG OCTODNS_PROVIDERS=""
+RUN python3 -m venv /opt/octodns \
+    && /opt/octodns/bin/pip install --no-cache-dir -r /tmp/octodns-requirements.txt ${OCTODNS_PROVIDERS} \
+    && cd /opt/octodns/lib/python*/site-packages \
+    && patch -p1 < /tmp/octodns-ech-validation.patch
+
 FROM ${HAPROXY_IMAGE} AS openssl-build
 USER root
 RUN apt-get install --update -y --no-install-recommends gcc libc6-dev liblua5.4-dev libpcre2-dev make patch perl wget
@@ -42,6 +53,9 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/usr/local/cargo/git cargo build --locked --release && cp target/release/haproxy-edge-operator /usr/local/bin/haproxy-edge-operator
 
 FROM ${HAPROXY_IMAGE}
+USER root
+RUN apt-get install --update -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 ARG HAPROXY_SOURCE_VERSION
 ARG HAPROXY_SOURCE_SHA256
 ENV HAPROXY_VERSION=${HAPROXY_SOURCE_VERSION} \
@@ -49,6 +63,7 @@ ENV HAPROXY_VERSION=${HAPROXY_SOURCE_VERSION} \
     HAPROXY_SHA256=${HAPROXY_SOURCE_SHA256}
 COPY --from=haproxy-build /usr/src/haproxy/haproxy /usr/local/sbin/haproxy
 COPY --from=openssl-build /opt/openssl/bin/openssl /usr/local/bin/openssl
+COPY --from=octodns-build /opt/octodns /opt/octodns
 COPY --from=build /usr/local/bin/haproxy-edge-operator /usr/local/bin/haproxy-edge-operator
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/haproxy-edge-operator"]

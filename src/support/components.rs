@@ -10,6 +10,10 @@ pub(crate) struct ProxyComponent;
 pub(crate) struct BundleComponent;
 
 #[derive(Clone, Copy, Serialize, Component)]
+#[component(name = "dns")]
+pub(crate) struct DnsComponent;
+
+#[derive(Clone, Copy, Serialize, Component)]
 #[component(name = "edge")]
 pub(crate) struct NamespaceComponent {
     pub(crate) node: ResourceId,

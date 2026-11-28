@@ -1,10 +1,15 @@
+pub(crate) mod address_dns;
+pub(crate) mod applied_readiness;
 pub(crate) mod bundle;
+pub(crate) mod dns;
 pub(crate) mod domain_certificate;
 pub(crate) mod domain_claims;
+pub(crate) mod domain_status;
 pub(crate) mod ech;
 pub(crate) mod ip_certificates;
 pub(crate) mod issuer;
 pub(crate) mod namespaces;
+pub(crate) mod prune_dns;
 pub(crate) mod prune_domain_certificates;
 pub(crate) mod prune_domain_claims;
 pub(crate) mod prune_ech;

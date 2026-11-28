@@ -3,10 +3,12 @@ use crate::{
     crds::IngressGroup,
     error::OperatorError,
     reconcilers::{
-        bundle::BundleReconciler, domain_certificate::DomainCertificateReconciler,
-        domain_claims::DomainClaimsReconciler, ech::EchReconciler,
+        address_dns::AddressDnsReconciler, applied_readiness::AppliedReadinessReconciler,
+        bundle::BundleReconciler, dns::DnsReconciler,
+        domain_certificate::DomainCertificateReconciler, domain_claims::DomainClaimsReconciler,
+        domain_status::DomainStatusReconciler, ech::EchReconciler,
         ip_certificates::IpCertificatesReconciler, issuer::IssuerReconciler,
-        namespaces::NamespacesReconciler,
+        namespaces::NamespacesReconciler, prune_dns::PruneDnsReconciler,
         prune_domain_certificates::PruneDomainCertificatesReconciler,
         prune_domain_claims::PruneDomainClaimsReconciler, prune_ech::PruneEchReconciler,
         prune_ip_certificates::PruneIpCertificatesReconciler,
@@ -30,6 +32,9 @@ impl Workflow for EdgeWorkflow {
         group: &IngressGroup,
     ) -> Result<Graph<Self::Crd, Self::Error>, GraphError> {
         let mut graph = Graph::new();
+        let prune_dns = PruneDnsReconciler {
+            state_namespace: self.state_namespace.clone(),
+        };
         let prune_claims = PruneDomainClaimsReconciler {
             state_namespace: self.state_namespace.clone(),
         };
@@ -44,13 +49,15 @@ impl Workflow for EdgeWorkflow {
                 PruneEchReconciler,
                 [PruneDomainCertificatesReconciler.into()],
             )?;
+            graph.add(prune_dns, [PruneEchReconciler.into()])?;
             return Ok(graph);
         }
         graph.add(ValidateReconciler, [])?;
         let Ok(certificates_domains) = group.icann_domains() else {
             return Ok(graph);
         };
-        graph.add(PruneEchReconciler, [ValidateReconciler.into()])?;
+        graph.add(prune_dns.clone(), [ValidateReconciler.into()])?;
+        graph.add(PruneEchReconciler, [prune_dns.into()])?;
         graph.add(
             PruneDomainCertificatesReconciler,
             [PruneEchReconciler.into()],
@@ -93,6 +100,24 @@ impl Workflow for EdgeWorkflow {
             ReadinessReconciler,
             [workload.clone().into(), bundle.into()],
         )?;
+        if group
+            .spec
+            .domains
+            .as_ref()
+            .is_some_and(|domains| !domains.is_empty())
+            || group.spec.ech.is_some()
+        {
+            let addresses = AddressDnsReconciler {
+                state_namespace: self.state_namespace.clone(),
+            };
+            graph.add(addresses.clone(), [workload.into()])?;
+            graph.add(AppliedReadinessReconciler, [ReadinessReconciler.into()])?;
+            graph.add(
+                DnsReconciler,
+                [AppliedReadinessReconciler.into(), addresses.into()],
+            )?;
+            graph.add(DomainStatusReconciler, [DnsReconciler.into()])?;
+        }
         Ok(graph)
     }
 }
