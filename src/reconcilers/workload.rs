@@ -2,10 +2,7 @@ use crate::{
     config::OperatorSettings,
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::{
-        components::{BundleComponent, ProxyComponent},
-        resources::{edge_nodes, labels, metadata, owner},
-    },
+    support::components::{BundleComponent, ProxyComponent},
 };
 use ech_k8s::{Component, K8sClient, NodeState, Reconciler, ResourcesExt};
 use k8s_openapi::{
@@ -29,7 +26,7 @@ impl Reconciler for WorkloadReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        for node in edge_nodes(client, group).await? {
+        for node in group.edge_nodes(client).await? {
             let command = |mode: &str| {
                 Some(vec![
                     "/usr/local/bin/haproxy-edge-operator".into(),
@@ -37,10 +34,10 @@ impl Reconciler for WorkloadReconciler {
                 ])
             };
             let desired = DaemonSet {
-                metadata: metadata(group, &node.namespace, ProxyComponent)?,
+                metadata: group.metadata(&node.namespace, ProxyComponent)?,
                 spec: Some(DaemonSetSpec {
                     selector: LabelSelector {
-                        match_labels: Some(labels(group, ProxyComponent)?),
+                        match_labels: Some(group.labels(ProxyComponent)?),
                         ..Default::default()
                     },
                     update_strategy: Some(DaemonSetUpdateStrategy {
@@ -49,7 +46,7 @@ impl Reconciler for WorkloadReconciler {
                     }),
                     template: PodTemplateSpec {
                         metadata: Some(kube::api::ObjectMeta {
-                            labels: Some(labels(group, ProxyComponent)?),
+                            labels: Some(group.labels(ProxyComponent)?),
                             ..Default::default()
                         }),
                         spec: Some(PodSpec {
@@ -93,7 +90,7 @@ impl Reconciler for WorkloadReconciler {
                                 Volume {
                                     name: "bundle".into(),
                                     secret: Some(SecretVolumeSource {
-                                        secret_name: Some(BundleComponent.name(owner(group)?)),
+                                        secret_name: Some(BundleComponent.name(group.owner()?)),
                                         default_mode: Some(0o440),
                                         ..Default::default()
                                     }),
@@ -159,7 +156,7 @@ impl Reconciler for WorkloadReconciler {
             };
             client
                 .namespaced::<DaemonSet>(&node.namespace)
-                .apply(ProxyComponent.name(owner(group)?), &desired)
+                .apply(ProxyComponent.name(group.owner()?), &desired)
                 .await?;
         }
         Ok(NodeState::Ready)

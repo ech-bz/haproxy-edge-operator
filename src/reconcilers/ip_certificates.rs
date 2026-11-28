@@ -2,9 +2,8 @@ use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
     support::{
-        certificates,
+        certificates::Certificates,
         components::{IpCertificateComponent, ResourceId},
-        resources::edge_nodes,
     },
 };
 use ech_k8s::{K8sClient, NodeState, Reconciler};
@@ -19,18 +18,17 @@ impl Reconciler for IpCertificatesReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        for node in edge_nodes(client, group).await? {
-            certificates::apply(
-                client,
-                group,
-                &node.namespace,
-                IpCertificateComponent {
-                    ip: ResourceId::new(node.ip.to_string()),
-                },
-                None,
-                Some(vec![node.ip.to_string()]),
-            )
-            .await?;
+        for node in group.edge_nodes(client).await? {
+            Certificates::new(client, group)
+                .apply(
+                    &node.namespace,
+                    IpCertificateComponent {
+                        ip: ResourceId::new(node.ip.to_string()),
+                    },
+                    None,
+                    Some(vec![node.ip.to_string()]),
+                )
+                .await?;
         }
         Ok(NodeState::Ready)
     }

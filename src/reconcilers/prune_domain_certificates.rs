@@ -2,9 +2,8 @@ use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
     support::{
-        certificates,
+        certificates::Certificates,
         components::{DomainCertificateComponent, ResourceId},
-        resources::owner,
     },
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, Reconciler};
@@ -19,7 +18,7 @@ impl Reconciler for PruneDomainCertificatesReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        let owner = owner(group)?;
+        let owner = group.owner()?;
         let desired = group
             .spec
             .domains
@@ -32,18 +31,15 @@ impl Reconciler for PruneDomainCertificatesReconciler {
                 .name(&owner)
             })
             .collect();
-        certificates::prune::<DomainCertificateComponent>(client, group, &group.cr_ns()?, &desired)
+        Certificates::new(client, group)
+            .prune::<DomainCertificateComponent>(&group.cr_ns()?, &desired)
             .await?;
         Ok(NodeState::Ready)
     }
 
     async fn cleanup(&self, client: &K8sClient, group: &IngressGroup) -> Result<()> {
-        certificates::prune::<DomainCertificateComponent>(
-            client,
-            group,
-            &group.cr_ns()?,
-            &Default::default(),
-        )
-        .await
+        Certificates::new(client, group)
+            .prune::<DomainCertificateComponent>(&group.cr_ns()?, &Default::default())
+            .await
     }
 }

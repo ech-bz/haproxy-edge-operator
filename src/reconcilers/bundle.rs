@@ -3,9 +3,11 @@ use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
     support::{
+        certificates::Certificates,
         components::*,
-        haproxy::{HeaderPart, HeaderTemplate, backend_url, dns_name, invalid},
-        resources::{edge_nodes, metadata, owner},
+        domain::DomainName,
+        haproxy::{BackendUrl, HeaderPart, HeaderTemplate},
+        resources::Http01Ingress,
     },
 };
 use ech_k8s::{Component, CrMeta, K8sClient, NodeState, Reconciler, ResourcesExt};
@@ -41,22 +43,17 @@ impl Reconciler for BundleReconciler {
         };
         let literal = |value: &str| quote(&value.replace('%', "%%"));
         let mut sources = BTreeMap::new();
-        let nodes = edge_nodes(client, group).await?;
+        let nodes = group.edge_nodes(client).await?;
         let mut solvers = client
             .all::<Ingress>()
             .api()
             .list(&ListParams::default().labels("acme.cert-manager.io/http01-solver=true"))
             .await?
             .items;
-        let class = format!("haproxy-{}", group.cr_name()?);
+        let name = group.cr_name()?;
         solvers.retain(|ingress| {
             ingress.metadata.deletion_timestamp.is_none()
-                && ingress
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.ingress_class_name.as_ref())
-                    .or_else(|| ingress.annotations().get("kubernetes.io/ingress.class"))
-                    == Some(&class)
+                && ingress.ingress_group() == Some(name.as_str())
                 && ingress.namespace().is_some_and(|namespace| {
                     group.namespace().as_ref() == Some(&namespace)
                         || nodes.iter().any(|node| node.namespace == namespace)
@@ -64,59 +61,17 @@ impl Reconciler for BundleReconciler {
         });
         solvers.sort_by_key(|ingress| (ingress.namespace(), ingress.name_any()));
         for node in nodes {
-            let mut certificates = vec![(
-                node.namespace.clone(),
-                IpCertificateComponent {
-                    ip: ResourceId::new(node.ip.to_string()),
-                }
-                .name(owner(group)?),
-                "default.pem".to_string(),
-                None,
-            )];
-            for domain in group.spec.domains.iter().flatten() {
-                certificates.push((
-                    group.cr_ns()?,
-                    DomainCertificateComponent {
-                        domain: ResourceId::new(domain),
-                    }
-                    .name(owner(group)?),
-                    format!("domain-{}.pem", hash(domain)),
-                    Some(domain),
-                ));
-            }
             let mut data = BTreeMap::new();
             let mut list = String::new();
             let mut complete = true;
-            for (namespace, name, file, domain) in certificates {
-                let Some(secret) = client
-                    .namespaced::<Secret>(&namespace)
-                    .api()
-                    .get_opt(&name)
-                    .await?
-                else {
+            for certificate in Certificates::new(client, group).files(&node)? {
+                let Some(pem) = certificate.load(client).await? else {
                     complete = false;
                     break;
                 };
-                let Some(source) = secret.data else {
-                    complete = false;
-                    break;
-                };
-                let (Some(cert), Some(key)) = (source.get("tls.crt"), source.get("tls.key")) else {
-                    complete = false;
-                    break;
-                };
-                let cert = std::str::from_utf8(&cert.0).map_err(|_| {
-                    OperatorError::Config(format!(
-                        "{namespace}/{name}: invalid certificate encoding"
-                    ))
-                })?;
-                let key = std::str::from_utf8(&key.0).map_err(|_| {
-                    OperatorError::Config(format!("{namespace}/{name}: invalid key encoding"))
-                })?;
-                data.insert(
-                    file.clone(),
-                    ByteString(format!("{cert}\n{key}\n").into_bytes()),
-                );
+                let file = certificate.file;
+                data.insert(file.clone(), ByteString(pem));
+                let domain = certificate.domain;
                 if let Some(domain) = domain {
                     writeln!(list, "@BUNDLE@/{file} {domain}").unwrap();
                 } else {
@@ -128,7 +83,7 @@ impl Reconciler for BundleReconciler {
                 data = client
                     .namespaced::<Secret>(&node.namespace)
                     .api()
-                    .get_opt(&BundleComponent.name(owner(group)?))
+                    .get_opt(&BundleComponent.name(group.owner()?))
                     .await?
                     .and_then(|secret| secret.data)
                     .unwrap_or_default();
@@ -137,12 +92,12 @@ impl Reconciler for BundleReconciler {
                     .get("crt-list")
                     .map(|value| std::str::from_utf8(&value.0))
                     .transpose()
-                    .map_err(|_| invalid("invalid previous certificate list"))?
+                    .map_err(|_| OperatorError::Config("invalid previous certificate list".into()))?
                     .unwrap_or_default()
                     .to_string();
             }
-            if !dns_name(&self.operator.cluster_domain) {
-                return Err(invalid("invalid cluster domain"));
+            if !DomainName::is_valid(&self.operator.cluster_domain) {
+                return Err(OperatorError::Config("invalid cluster domain".into()));
             }
             let ip = match node.ip {
                 std::net::IpAddr::V4(ip) => ip.to_string(),
@@ -150,6 +105,7 @@ impl Reconciler for BundleReconciler {
             };
             let mut config = format!(
                 r"global
+  user root
   log stdout format raw local0
   maxconn 10000
 
@@ -178,8 +134,8 @@ frontend http
                     .flat_map(|spec| spec.rules.iter().flatten())
                 {
                     let host = rule.host.as_deref().unwrap_or_default();
-                    if !host.is_empty() && !dns_name(host) {
-                        return Err(invalid("invalid HTTP-01 solver host"));
+                    if !host.is_empty() && !DomainName::is_valid(host) {
+                        return Err(OperatorError::Config("invalid HTTP-01 solver host".into()));
                     }
                     for path in rule.http.iter().flat_map(|http| &http.paths) {
                         let Some(token) = path
@@ -198,8 +154,10 @@ frontend http
                         let Some(service) = &path.backend.service else {
                             continue;
                         };
-                        if !dns_name(&service.name) || service.name.contains('.') {
-                            return Err(invalid("invalid HTTP-01 solver service"));
+                        if !DomainName::is_valid(&service.name) || service.name.contains('.') {
+                            return Err(OperatorError::Config(
+                                "invalid HTTP-01 solver service".into(),
+                            ));
                         }
                         let Some(port) = service
                             .port
@@ -207,7 +165,9 @@ frontend http
                             .and_then(|port| port.number)
                             .filter(|port| (1..=65535).contains(port))
                         else {
-                            return Err(invalid("HTTP-01 solver requires a numeric service port"));
+                            return Err(OperatorError::Config(
+                                "HTTP-01 solver requires a numeric service port".into(),
+                            ));
                         };
                         write!(
                             config,
@@ -291,7 +251,7 @@ frontend http
                 }
                 config.push_str("  default_backend unmatched\n");
                 for (index, route) in routes.iter().enumerate() {
-                    let url = backend_url(&route.url)?;
+                    let BackendUrl(url) = BackendUrl::new(&route.url)?;
                     let scheme = url.scheme_str().unwrap();
                     let host = url.host().unwrap();
                     let port = url
@@ -351,10 +311,10 @@ frontend http
                                                     .as_ref()
                                                     .and_then(|data| data.get(key))
                                                     .ok_or_else(|| {
-                                                        invalid(format!("Secret {namespace}/{name} has no key {key}"))
+                                                        OperatorError::Config(format!("Secret {namespace}/{name} has no key {key}"))
                                                     })?;
                                                 String::from_utf8(data.0.clone()).map_err(|_| {
-                                                    invalid(format!("Secret {namespace}/{name} key {key} is not UTF-8"))
+                                                    OperatorError::Config(format!("Secret {namespace}/{name} key {key} is not UTF-8"))
                                                 })?
                                             } else {
                                                 let config_map = client
@@ -366,11 +326,11 @@ frontend http
                                                     .data
                                                     .and_then(|mut data| data.remove(key))
                                                     .ok_or_else(|| {
-                                                        invalid(format!("ConfigMap {namespace}/{name} has no key {key}"))
+                                                        OperatorError::Config(format!("ConfigMap {namespace}/{name} has no key {key}"))
                                                     })?
                                             };
                                             if text.chars().any(char::is_control) {
-                                                return Err(invalid(format!(
+                                                return Err(OperatorError::Config(format!(
                                                     "control character in {kind} {namespace}/{name} key {key}"
                                                 )));
                                             }
@@ -396,7 +356,7 @@ frontend http
                     }
                     match scheme {
                         "https" => {
-                            write!(config, " ssl verify required ca-file /etc/ssl/certs/ca-certificates.crt verifyhost {name} alpn h2,http/1.1").unwrap();
+                            write!(config, " ssl verify required ca-file /etc/ssl/certs/ca-certificates.crt verifyhost {name} alpn h2,http/1.1 no-sni-auto").unwrap();
                             if !ip {
                                 write!(config, " sni str({host})").unwrap();
                             }
@@ -412,9 +372,9 @@ frontend http
             client
                 .namespaced::<Secret>(&node.namespace)
                 .apply(
-                    BundleComponent.name(owner(group)?),
+                    BundleComponent.name(group.owner()?),
                     &Secret {
-                        metadata: metadata(group, &node.namespace, BundleComponent)?,
+                        metadata: group.metadata(&node.namespace, BundleComponent)?,
                         data: Some(data),
                         type_: Some("Opaque".into()),
                         ..Default::default()

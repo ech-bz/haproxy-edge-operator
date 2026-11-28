@@ -1,10 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::{
-        components::ProxyComponent,
-        resources::{edge_nodes, owner},
-    },
+    support::components::ProxyComponent,
 };
 use ech_k8s::{Component, K8sClient, NodeState, Reconciler};
 use k8s_openapi::api::apps::v1::DaemonSet;
@@ -20,11 +17,11 @@ impl Reconciler for ReadinessReconciler {
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
         let mut ready = true;
-        for node in edge_nodes(client, group).await? {
+        for node in group.edge_nodes(client).await? {
             let actual = client
                 .namespaced::<DaemonSet>(&node.namespace)
                 .api()
-                .get(&ProxyComponent.name(owner(group)?))
+                .get(&ProxyComponent.name(group.owner()?))
                 .await?;
             ready &= actual.status.as_ref().is_some_and(|status| {
                 status.observed_generation == actual.metadata.generation

@@ -1,7 +1,10 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::haproxy::{HeaderTemplate, backend_url, dns_name, invalid},
+    support::{
+        domain::DomainName,
+        haproxy::{BackendUrl, HeaderTemplate},
+    },
 };
 use ech_k8s::{CrMeta, K8sClient, NodeState, Reconciler};
 use kube::{ResourceExt, api::ListParams};
@@ -18,12 +21,18 @@ impl Reconciler for ValidateReconciler {
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
         if group.cr_name()?.len() > 63 {
-            return Err(invalid("group name exceeds the node label limit"));
+            return Err(OperatorError::Config(
+                "group name exceeds the node label limit".into(),
+            ));
         }
         let mut domains = BTreeSet::new();
         for domain in group.spec.domains.as_deref().unwrap_or_default() {
-            if !dns_name(domain.strip_prefix("*.").unwrap_or(domain)) || !domains.insert(domain) {
-                return Err(invalid(format!("invalid or duplicate domain {domain}")));
+            if !DomainName::is_valid(domain.strip_prefix("*.").unwrap_or(domain))
+                || !domains.insert(domain)
+            {
+                return Err(OperatorError::Config(format!(
+                    "invalid or duplicate domain {domain}"
+                )));
             }
         }
         for trusted in group
@@ -35,7 +44,9 @@ impl Reconciler for ValidateReconciler {
             if trusted.parse::<std::net::IpAddr>().is_err()
                 && trusted.parse::<ipnet::IpNet>().is_err()
             {
-                return Err(invalid(format!("invalid trusted IP or CIDR {trusted}")));
+                return Err(OperatorError::Config(format!(
+                    "invalid trusted IP or CIDR {trusted}"
+                )));
             }
         }
         let mut paths = BTreeSet::new();
@@ -48,12 +59,12 @@ impl Reconciler for ValidateReconciler {
                     .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#')
                 || !paths.insert(&route.path_prefix)
             {
-                return Err(invalid(format!(
+                return Err(OperatorError::Config(format!(
                     "invalid or duplicate pathPrefix {}",
                     route.path_prefix
                 )));
             }
-            backend_url(&route.url)?;
+            BackendUrl::new(&route.url)?;
             let mut headers = BTreeSet::new();
             for (name, value) in route.headers.iter().flatten() {
                 if name.is_empty()
@@ -62,7 +73,7 @@ impl Reconciler for ValidateReconciler {
                         .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
                     || !headers.insert(name.to_ascii_lowercase())
                 {
-                    return Err(invalid(format!(
+                    return Err(OperatorError::Config(format!(
                         "invalid or duplicate request header {name}"
                     )));
                 }

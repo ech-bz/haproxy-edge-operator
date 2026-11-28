@@ -2,9 +2,8 @@ use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
     support::{
-        certificates,
+        certificates::Certificates,
         components::{IpCertificateComponent, ResourceId},
-        resources::{node_ip, owner, selected_nodes},
     },
 };
 use ech_k8s::{Component, K8sClient, NodeState, Reconciler};
@@ -20,8 +19,8 @@ impl Reconciler for PruneIpCertificatesReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        for node in selected_nodes(client, group).await? {
-            let Ok(ip) = node_ip(&node.node) else {
+        for node in group.selected_nodes(client).await? {
+            let Ok(ip) = node.ip() else {
                 continue;
             };
             let namespace = node.namespace;
@@ -37,8 +36,9 @@ impl Reconciler for PruneIpCertificatesReconciler {
             let desired = BTreeSet::from([IpCertificateComponent {
                 ip: ResourceId::new(ip.to_string()),
             }
-            .name(owner(group)?)]);
-            certificates::prune::<IpCertificateComponent>(client, group, &namespace, &desired)
+            .name(group.owner()?)]);
+            Certificates::new(client, group)
+                .prune::<IpCertificateComponent>(&namespace, &desired)
                 .await?;
         }
         Ok(NodeState::Ready)

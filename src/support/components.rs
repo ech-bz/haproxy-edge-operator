@@ -22,7 +22,7 @@ impl NamespacePrefix {
         let value = value.as_ref();
         let limit = 63 - component.name("").len();
         Self(if value.len() > limit || value.contains('.') {
-            let digest = hash(value);
+            let digest = ResourceId::new(value).to_string();
             let readable = limit - digest.len() - 1;
             format!(
                 "{}-{digest}",
@@ -72,8 +72,3 @@ pub(crate) const GROUP: &str = "haproxy.ech.bz/ingress-group";
 pub(crate) const GROUP_NS: &str = "haproxy.ech.bz/ingress-namespace";
 pub(crate) const OWNER: &str = "haproxy.ech.bz/ingress-uid";
 pub(crate) const PUBLIC_IP: &str = "ech.bz/public-ip";
-
-pub(crate) fn hash(value: impl AsRef<[u8]>) -> String {
-    use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(value.as_ref()))[..16].into()
-}

@@ -1,10 +1,7 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::{
-        components::{NamespaceComponent, OWNER, ResourceId},
-        resources::{edge_nodes, labels},
-    },
+    support::components::{NamespaceComponent, OWNER, ResourceId},
 };
 use ech_k8s::{K8sClient, NodeState, Reconciler};
 use k8s_openapi::api::core::v1::Namespace;
@@ -23,14 +20,11 @@ impl Reconciler for NamespacesReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        for node in edge_nodes(client, group).await? {
+        for node in group.selected_nodes(client).await? {
             let name = node.namespace;
-            let labels = labels(
-                group,
-                NamespaceComponent {
-                    node: ResourceId::new(node.name),
-                },
-            )?;
+            let labels = group.labels(NamespaceComponent {
+                node: ResourceId::new(node.node.name_any()),
+            })?;
             let api = client.all::<Namespace>();
             match api.api().get_opt(&name).await? {
                 Some(namespace) if namespace.labels().get(OWNER) != labels.get(OWNER) => {

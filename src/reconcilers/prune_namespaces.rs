@@ -1,7 +1,6 @@
 use crate::{
     crds::IngressGroup,
     error::{OperatorError, Result},
-    support::resources::{owned_namespaces, selected_nodes},
 };
 use ech_k8s::{K8sClient, NodeState, Reconciler, ResourcesExt};
 use k8s_openapi::api::core::v1::Namespace;
@@ -18,12 +17,13 @@ impl Reconciler for PruneNamespacesReconciler {
     type Error = OperatorError;
 
     async fn reconcile(&self, client: &K8sClient, group: &IngressGroup) -> Result<NodeState> {
-        let desired: BTreeSet<_> = selected_nodes(client, group)
+        let desired: BTreeSet<_> = group
+            .selected_nodes(client)
             .await?
             .into_iter()
             .map(|node| node.namespace)
             .collect();
-        for namespace in owned_namespaces(client, group).await? {
+        for namespace in group.owned_namespaces(client).await? {
             if !desired.contains(&namespace.name_any()) {
                 client
                     .all::<Namespace>()
@@ -35,7 +35,7 @@ impl Reconciler for PruneNamespacesReconciler {
     }
 
     async fn cleanup(&self, client: &K8sClient, group: &IngressGroup) -> Result<()> {
-        let namespaces = owned_namespaces(client, group).await?;
+        let namespaces = group.owned_namespaces(client).await?;
         for namespace in &namespaces {
             client
                 .all::<Namespace>()
